@@ -51,6 +51,31 @@ def walk_library(root: str):
         yield rel, listing, videos
 
 
+def merge_series_dirs(series: dict[str, dict]) -> dict[str, str]:
+    """Map series-folder keys that name the same show onto one canonical key.
+
+    Folders merge when their cleaned titles match and their years are equal.
+    A folder with no year joins the one dated folder of that title, but stays
+    on its own if there are several (remakes: "Show (2005)", "Show (2020)").
+    """
+    groups: dict[tuple[str, int | None], list[str]] = {}
+    for key, s in series.items():
+        groups.setdefault((naming.title_key(s["title"]), s["year"]), []).append(key)
+    for (tkey, year), keys in list(groups.items()):
+        if year is not None:
+            continue
+        dated = [g for g in groups if g[0] == tkey and g[1] is not None]
+        if len(dated) == 1:
+            groups[dated[0]].extend(groups.pop((tkey, year)))
+    merge: dict[str, str] = {}
+    for keys in groups.values():
+        if len(keys) > 1:
+            keys.sort(key=lambda k: (series[k]["year"] is None, k))
+            for key in keys[1:]:
+                merge[key] = keys[0]
+    return merge
+
+
 class Scanner:
     def __init__(self, cfg: Config, db: Database, images: Images):
         self.cfg = cfg
@@ -125,51 +150,75 @@ class Scanner:
             if videos:
                 files.append((rel_dir, listing, videos))
 
-        rows = []
-        series: dict[str, dict] = {}
-        loose: dict[str, list[dict]] = {}
+        parsed_files = []
         for rel_dir, listing, videos in files:
             for name in videos:
                 rel = f"{rel_dir}/{name}" if rel_dir else name
-                full = os.path.join(root, rel)
-                try:
-                    st = os.stat(full)
-                except OSError:
-                    continue
-                parsed = naming.parse_path(rel, lib.type, siblings=len(videos))
-                iid = item_id(lib.name, rel)
-                stem = os.path.splitext(name)[0]
-                row = {
-                    "id": iid, "library": lib.name, "rel_path": rel, "path": full,
-                    "size": st.st_size, "mtime": st.st_mtime, "kind": parsed.kind,
-                    "season": parsed.season, "episode": parsed.episode,
-                    "episode_end": parsed.episode_end, "title": parsed.title,
-                    "year": parsed.year, "series_id": None,
-                }
-                if parsed.kind == "episode":
-                    img = find_image(listing, (f"{stem}-thumb", stem))
-                    s_key = parsed.series_dir or ""
-                    s = {"title": parsed.series_title, "year": parsed.series_year,
-                         "dir": parsed.series_dir}
-                    if s_key:
-                        series.setdefault(s_key, s)
-                    else:
-                        loose.setdefault(naming.title_key(parsed.series_title), []).append(row)
-                    row["_series_key"] = s_key
-                    row["_series"] = s
-                    row["sort_name"] = f"{(parsed.season or 0):04d}{(parsed.episode or 0):05d}{name.lower()}"
-                    if not row["title"]:
-                        row["title"] = f"Episode {parsed.episode}" if parsed.episode is not None else stem
+                parsed_files.append((rel_dir, listing, videos, name, rel,
+                                     naming.parse_path(rel, lib.type, siblings=len(videos))))
+        # A show folder with recognised episodes claims every other video under
+        # it too ("Show/Pilot.mkv", "Show/Arc 2/Some Title.mkv"), so those don't
+        # end up as loose movies cluttering the library.
+        show_dirs = {p.series_dir for *_, p in parsed_files if p.kind == "episode" and p.series_dir}
+        if lib.type == "auto" and show_dirs:
+            for i, (rel_dir, listing, videos, name, rel, parsed) in enumerate(parsed_files):
+                if parsed.kind == "movie" and rel_dir and rel_dir.split("/")[0] in show_dirs:
+                    parsed = naming.parse_path(rel, "shows", siblings=len(videos))
+                    parsed_files[i] = (rel_dir, listing, videos, name, rel, parsed)
+
+        rows = []
+        series: dict[str, dict] = {}
+        loose: dict[str, list[dict]] = {}
+        for rel_dir, listing, videos, name, rel, parsed in parsed_files:
+            full = os.path.join(root, rel)
+            try:
+                st = os.stat(full)
+            except OSError:
+                continue
+            iid = item_id(lib.name, rel)
+            stem = os.path.splitext(name)[0]
+            row = {
+                "id": iid, "library": lib.name, "rel_path": rel, "path": full,
+                "size": st.st_size, "mtime": st.st_mtime, "kind": parsed.kind,
+                "season": parsed.season, "episode": parsed.episode,
+                "episode_end": parsed.episode_end, "title": parsed.title,
+                "year": parsed.year, "series_id": None,
+            }
+            if parsed.kind == "episode":
+                img = find_image(listing, (f"{stem}-thumb", stem))
+                s_key = parsed.series_dir or ""
+                s = {"title": parsed.series_title, "year": parsed.series_year,
+                     "dir": parsed.series_dir}
+                if s_key:
+                    series.setdefault(s_key, s)
                 else:
-                    img = find_image(listing, (f"{stem}-poster", stem, f"{stem}-thumb"))
-                    if img is None and rel_dir and len(videos) == 1:
-                        img = find_image(listing, POSTER_NAMES)
-                    row["sort_name"] = naming.sort_key(parsed.title)
-                row["image"] = os.path.join(root, rel_dir, img) if img else None
-                old = existing.get(iid)
-                row["changed"] = old is None or old["size"] != st.st_size or old["mtime"] != st.st_mtime
-                row["added_at"] = old["added_at"] if old else max(st.st_mtime, st.st_ctime)
-                rows.append(row)
+                    loose.setdefault(naming.title_key(parsed.series_title), []).append(row)
+                row["_series_key"] = s_key
+                row["_series"] = s
+                row["sort_name"] = f"{(parsed.season or 0):04d}{(parsed.episode or 0):05d}{name.lower()}"
+                if not row["title"]:
+                    row["title"] = f"Episode {parsed.episode}" if parsed.episode is not None else stem
+            else:
+                img = find_image(listing, (f"{stem}-poster", stem, f"{stem}-thumb"))
+                if img is None and rel_dir and len(videos) == 1:
+                    img = find_image(listing, POSTER_NAMES)
+                row["sort_name"] = naming.sort_key(parsed.title)
+            row["image"] = os.path.join(root, rel_dir, img) if img else None
+            old = existing.get(iid)
+            row["changed"] = old is None or old["size"] != st.st_size or old["mtime"] != st.st_mtime
+            row["added_at"] = old["added_at"] if old else max(st.st_mtime, st.st_ctime)
+            rows.append(row)
+
+        # Several top-level folders of one show ("Show.S01.1080p-GRP",
+        # "Show.S02.1080p-GRP") become one series. A folder without a year
+        # joins the folder with a year only when there is no other candidate.
+        merge = merge_series_dirs(series)
+        if merge:
+            for row in rows:
+                if row["kind"] == "episode" and row["_series_key"] in merge:
+                    row["_series_key"] = merge[row["_series_key"]]
+            for key, target in merge.items():
+                series[target].setdefault("dirs", [target]).append(series.pop(key)["dir"])
 
         # Loose episode files ("[Grp] Show - 01.mkv" in the library root) join a
         # folder series with the same title when there is exactly one.
@@ -193,10 +242,11 @@ class Scanner:
             sid = series_id(lib.name, key)
             series_ids[key] = sid
             poster = None
-            if s["dir"]:
-                listing = dirs.get(s["dir"], {})
-                img = find_image(listing, POSTER_NAMES)
-                poster = os.path.join(root, s["dir"], img) if img else None
+            for d in s.get("dirs", [s["dir"]] if s["dir"] else []):
+                img = find_image(dirs.get(d, {}), POSTER_NAMES)
+                if img:
+                    poster = os.path.join(root, d, img)
+                    break
             posters[sid] = poster
             stmts.append((
                 "INSERT INTO series(id, library, title, year, dir, poster, sort_name, added_at) "

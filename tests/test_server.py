@@ -248,3 +248,31 @@ def test_new_sidecar_poster_replaces_cached_series_image(env):
     touch(env["shows"], "Show (2020)/poster.jpg", b"poster")
     env["scanner"].scan()
     assert not os.path.exists(cached)
+
+
+def test_nested_show_folders_group_into_one_series(tmp_path):
+    anime = str(tmp_path / "media" / "Anime")
+    touch(anime, "Show/Show S01/[Grp] Show - 01 [1080p].mkv")
+    touch(anime, "Show/Show S01/[Grp] Show - 02 [1080p].mkv")
+    touch(anime, "Show/Show S02/[Grp] Show - 01 [1080p].mkv")
+    touch(anime, "Show/Show.S02E02.1080p-GRP/abc123.mkv")
+    touch(anime, "Show/Pilot.mkv")  # no number, still part of the show
+    touch(anime, "Other.S01.1080p-GRP/Other.S01E01.1080p-GRP.mkv")
+    touch(anime, "Other.S02.1080p-GRP/Other.S02E01.1080p-GRP.mkv")
+    touch(anime, "Lone Film (2001)/Lone Film (2001).mkv")
+    cfg = Config(api_key=KEY, libraries=[Library("Anime", anime, "auto")],
+                 cache_dir=str(tmp_path / "cache"), config_dir=str(tmp_path / "config"),
+                 ffmpeg="/nonexistent/ffmpeg", ffprobe="/nonexistent/ffprobe")
+    db = Database(cfg.cache_dir, cfg.config_dir)
+    Scanner(cfg, db, Images(cfg, db)).scan_library(cfg.libraries[0])
+
+    series = {r["title"]: r["id"] for r in db.query("SELECT id, title FROM series")}
+    assert sorted(series) == ["Other", "Show"]
+    eps = {r["rel_path"]: (r["series_id"], r["season"], r["episode"]) for r in db.query(
+        "SELECT rel_path, series_id, season, episode FROM items WHERE kind='episode'")}
+    assert eps["Show/Show S02/[Grp] Show - 01 [1080p].mkv"] == (series["Show"], 2, 1)
+    assert eps["Show/Show.S02E02.1080p-GRP/abc123.mkv"] == (series["Show"], 2, 2)
+    assert eps["Show/Pilot.mkv"][0] == series["Show"]
+    assert eps["Other.S02.1080p-GRP/Other.S02E01.1080p-GRP.mkv"] == (series["Other"], 2, 1)
+    movies = [r["title"] for r in db.query("SELECT title FROM items WHERE kind='movie'")]
+    assert movies == ["Lone Film"]
