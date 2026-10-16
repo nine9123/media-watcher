@@ -60,19 +60,23 @@ _EMPTY_PARENS = re.compile(r"\(\s*\)")
 _SPACES = re.compile(r"\s+")
 
 _SXXEYY = re.compile(
-    r"(?<![a-z0-9])s(\d{1,2})[ ._-]?e(\d{1,4})(?:(?:[-_ ]?e|-)(\d{1,4}))?(?![0-9])",
+    r"(?<![a-z0-9])s(\d{1,2})[ ._-]{0,3}e(\d{1,4})(?:(?:[-_ ]?e|-)(\d{1,4}))?(?![0-9])",
     re.I,
 )
 _NXNN = re.compile(r"(?<![a-z0-9])(\d{1,2})x(\d{2,3})(?:-(\d{2,3}))?(?![0-9a-z])", re.I)
 _EPISODE_WORD = re.compile(
     r"(?<![a-z])(?:episode|ep\.?)[ ._-]?(\d{1,4})(?![0-9])", re.I
 )
+# A lone episode marker without a season: "Show.E01.1080p", "Show E12"
+_E_NUMBER = re.compile(r"(?<![a-z0-9])e(\d{1,4})(?:v\d)?(?![0-9a-z])", re.I)
 # "Show - 05", "Show - 05v2", "Show - 05 - Title", "Show - 05 [1080p]"
 _DASH_NUMBER = re.compile(r"^(.*?)\s+-\s+(\d{1,4})(?:v\d)?(?=$|[\s\[(.\-])")
 # Leading number inside a season/series folder: "05.mkv", "05 - Title.mkv"
 _LEADING_NUMBER = re.compile(r"^(?:e|ep)?(\d{1,4})(?:v\d)?(?=$|[\s._\-\[(])", re.I)
 # Trailing number: "Show 05", "Show_05v2"
 _TRAILING_NUMBER = re.compile(r"^(.*?)[\s._](\d{1,3})(?:v\d)?$")
+# Number followed by a title: "Naruto 001 - Enter Naruto"
+_NUMBER_DASH = re.compile(r"^(.*?\S)\s+(\d{1,4})(?:v\d)?\s+-\s+")
 
 _SEASON_DIR = re.compile(
     r"^(?:season|staffel|saison|temporada|series)[ ._-]*(\d{1,3})$|^s(\d{1,3})$", re.I
@@ -175,6 +179,14 @@ def split_season_in_name(name: str) -> tuple[str, int | None]:
     return name[: m.start()], int(m.group(1) or m.group(2))
 
 
+def season_in_dir(name: str) -> int | None:
+    """Season named by a folder, pure ("Season 2") or not ("Show.S02.1080p", "Season 1 (2019)")."""
+    season = season_from_dir(name)
+    if season is None:
+        season = split_season_in_name(name)[1]
+    return season
+
+
 def _episode_title(rest: str) -> str:
     rest = rest.strip()
     if " " not in rest and "." in rest:
@@ -198,9 +210,15 @@ def _match_episode(stem: str):
     m = _EPISODE_WORD.search(stem)
     if m:
         return stem[: m.start()], None, int(m.group(1)), None, stem[m.end() :]
+    m = _E_NUMBER.search(stem)
+    if m and m.start() > 0:
+        return stem[: m.start()], None, int(m.group(1)), None, stem[m.end() :]
     # Fansub style. Strip leading [Group] first so it does not end up in the title.
-    lead = re.match(r"^(?:\[[^\]]*\]\s*)+", stem)
+    # Underscores stand in for spaces: "[Grp]_Show_-_01_[720p]".
+    lead = re.match(r"^(?:\[[^\]]*\][\s_]*)+", stem)
     body = stem[lead.end() :] if lead else stem
+    if " " not in body:
+        body = body.replace("_", " ")
     m = _DASH_NUMBER.match(body)
     if m and not _is_year(int(m.group(2))):
         return m.group(1), None, int(m.group(2)), None, body[m.end() :]
@@ -239,9 +257,7 @@ def _series_from_dirs(dirs: list[str]):
         return None, None, "", None
     season = None
     for d in reversed(dirs):
-        season = season_from_dir(d)
-        if season is None:
-            season = split_season_in_name(d)[1]
+        season = season_in_dir(d)
         if season is not None:
             break
     if season_from_dir(dirs[0]) is not None:
@@ -258,34 +274,47 @@ def _series_from_dirs(dirs: list[str]):
 def _parse_episode(stem: str, dirs: list[str], library_type: str, siblings: int):
     found = _match_episode(stem)
     if found is None and len(dirs) >= 2:
-        # Per-episode release folder with an obfuscated file inside:
-        # "Show/Show.S01E02.1080p-GRP/abc123.mkv".
-        m = _SXXEYY.search(dirs[-1])
-        if m:
-            end = int(m.group(3)) if m.group(3) else None
-            found = ("", int(m.group(1)), int(m.group(2)), end, "")
-    in_season_dir = bool(dirs) and season_from_dir(dirs[-1]) is not None
+        # Per-episode folder with an obfuscated file inside:
+        # "Show/Show.S01E02.1080p-GRP/abc123.mkv", "Show/Episode 01/video.mkv".
+        d = _match_episode(dirs[-1])
+        if d is not None:
+            found = ("", d[1], d[2], d[3], "")
+    # Any folder naming a season ("Season 1 (2019)", "Show.S01.1080p-GRP")
+    # means everything below it is an episode, numbered or not.
+    under_season = any(season_in_dir(d) is not None for d in dirs)
 
     if found is None:
         # Bare numbers only when context says this is a series.
-        if dirs and (in_season_dir or siblings >= 2 or library_type == "shows"):
+        if dirs and (under_season or siblings >= 2 or library_type == "shows"):
             m = _LEADING_NUMBER.match(stem)
             if m and not _is_year(int(m.group(1))):
                 found = ("", None, int(m.group(1)), None, stem[m.end() :])
             else:
+                m = _NUMBER_DASH.match(stem)
+                if m and not _is_year(int(m.group(2))):
+                    found = (m.group(1), None, int(m.group(2)), None, stem[m.end() :])
+            if found is None:
                 cleaned = _BRACKETS.sub(" ", stem).strip()
                 cut = _RELEASE_RE.search(cleaned)
                 if cut and cut.start() > 0:
-                    cleaned = cleaned[: cut.start()].strip()
-                m = _TRAILING_NUMBER.match(cleaned)
+                    cleaned = cleaned[: cut.start()]
+                m = _TRAILING_NUMBER.match(cleaned.strip(" ._-"))
                 if m and not _is_year(int(m.group(2))):
                     found = (m.group(1), None, int(m.group(2)), None, "")
-        if found is None and library_type != "shows":
+        if found is None and library_type != "shows" and not under_season:
             return None
         if found is None:
             found = (stem, None, None, None, "")
 
     prefix, season, episode, episode_end, rest = found
+    name_season = None
+    if season is None:
+        # "[Grp] Show S2 - 05": the season sits in front of the bare number.
+        stripped, name_season = split_season_in_name(prefix)
+        if name_season is not None and clean_title(stripped)[0]:
+            prefix = stripped
+        else:
+            name_season = None
     s_title, s_year, s_dir, dir_season = _series_from_dirs(dirs)
     if s_title is None:
         s_title, s_year = clean_title(prefix)
@@ -293,7 +322,7 @@ def _parse_episode(stem: str, dirs: list[str], library_type: str, siblings: int)
         if not s_title:
             s_title = "Unknown"
     if season is None:
-        season = dir_season if dir_season is not None else 1
+        season = next((s for s in (dir_season, name_season) if s is not None), 1)
     title = _episode_title(rest) if rest else ""
     if episode is None:
         title = clean_title(stem)[0]

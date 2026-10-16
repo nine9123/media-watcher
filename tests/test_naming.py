@@ -179,3 +179,45 @@ def test_episode_from_release_folder_when_file_is_obfuscated():
 def test_library_that_is_one_show():
     r = ep("Season 2/Show - S02E01.mkv")
     assert (r.series_title, r.series_dir, r.season) == ("Show", "", 2)
+
+
+@pytest.mark.parametrize(
+    "path,siblings,series,season,episode,title",
+    [
+        # Unnumbered files under a season folder are still episodes.
+        ("Show/Season 1/Pilot.mkv", 1, "Show", 1, None, "Pilot"),
+        ("Show/Season 2 (2019)/Pilot.mkv", 1, "Show", 2, None, "Pilot"),
+        ("Show.S01.1080p-GRP/Pilot.mkv", 1, "Show", 1, None, "Pilot"),
+        # Underscores instead of spaces.
+        ("Show/[Grp]_Show_-_01_[720p].mkv", 1, "Show", 1, 1, ""),
+        ("[Grp]_Show_-_01_[720p].mkv", 1, "Show", 1, 1, ""),
+        ("Show/Show_05_[720p].mkv", 3, "Show", 1, 5, ""),
+        # Lone E-marker and spaced SxxEyy.
+        ("Show/Show.E01.1080p.mkv", 1, "Show", 1, 1, ""),
+        ("Show/Show S02 - E03.mkv", 1, "Show", 2, 3, ""),
+        # Number then title.
+        ("Naruto/Naruto 001 - Enter Naruto.mkv", 5, "Naruto", 1, 1, "Enter Naruto"),
+        # Per-episode folders.
+        ("Show/Episode 01/video.mkv", 1, "Show", 1, 1, ""),
+        ("Show/[Grp] Show - 04 [1080p]/abc.mkv", 1, "Show", 1, 4, ""),
+        # Season in front of a fansub number.
+        ("[SubsPlease] Show S2 - 05 (1080p).mkv", 1, "Show", 2, 5, ""),
+        ("Show/[SubsPlease] Show S2 - 05 (1080p).mkv", 1, "Show", 2, 5, ""),
+    ],
+)
+def test_episodes_in_folders_are_not_movies(path, siblings, series, season, episode, title):
+    r = ep(path, siblings=siblings)
+    assert (r.series_title, r.season, r.episode, r.title) == (series, season, episode, title)
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "WALL-E (2008)/WALL-E (2008).mkv",
+        "S1m0ne (2002)/S1m0ne (2002).mkv",
+        "Movie.2010.1080p.DDP5.1.E-AC3.x264.mkv",
+        "Apollo 13 (1995)/Apollo 13.mkv",
+    ],
+)
+def test_new_episode_rules_leave_movies_alone(path):
+    assert parse_path(path).kind == "movie"
