@@ -34,6 +34,11 @@ Open `http://<nas>:8097` and sign in with the API key. The first scan starts
 immediately; new files show up on the next scan (every 30 min by default) or
 when you press ⟳ in the header.
 
+**On TrueNAS** the compose file above can't be used as-is: a custom app has
+no checkout to build from and no `.env`. The Gitea workflow in
+`.gitea/workflows/build.yml` pushes an image to the registry instead; see
+[docs/truenas.md](docs/truenas.md) for installing it as a custom app.
+
 ### Volumes
 
 | Mount     | What                                              | Lose it?                                      |

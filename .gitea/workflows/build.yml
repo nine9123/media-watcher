@@ -1,0 +1,43 @@
+name: Build image
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  REGISTRY: gitea.internal:30008
+  IMAGE_NAME: nine9/media-watcher
+  # Passed to the Dockerfile's EXTRA_PACKAGES build arg. Empty = software
+  # transcoding only. For HWACCEL=vaapi on an Intel iGPU set it to
+  # "intel-media-va-driver", on AMD "mesa-va-drivers".
+  EXTRA_PACKAGES: ""
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Log in to Gitea registry
+        run: |
+          echo "${{ secrets.REGISTRY_TOKEN }}" | docker login ${{ env.REGISTRY }} \
+            -u "${{ secrets.REGISTRY_USER }}" --password-stdin
+
+      - name: Build image
+        run: |
+          SHA_SHORT=$(echo "${{ gitea.sha }}" | cut -c1-8)
+          docker build \
+            --platform linux/amd64 \
+            --build-arg EXTRA_PACKAGES="${{ env.EXTRA_PACKAGES }}" \
+            --label "org.opencontainers.image.revision=${{ gitea.sha }}" \
+            -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${SHA_SHORT} \
+            -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest \
+            .
+          echo "SHA_SHORT=${SHA_SHORT}" >> "$GITEA_ENV"
+
+      - name: Push image
+        run: |
+          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.SHA_SHORT }}
+          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
