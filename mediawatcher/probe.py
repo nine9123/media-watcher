@@ -6,11 +6,21 @@ import json
 import subprocess
 
 
+ENTRIES = (
+    "format=duration,start_time,format_name"
+    ":stream=index,codec_type,codec_name,profile,width,height,pix_fmt,color_transfer,"
+    "channels,channel_layout:stream_tags:stream_disposition"
+)
+
+
 def probe(ffprobe: str, path: str, timeout: float = 60) -> dict:
     out = subprocess.run(
         [
             ffprobe, "-v", "error", "-hide_banner",
-            "-print_format", "json", "-show_format", "-show_streams", path,
+            "-print_format", "json",
+            # Only what summarize() reads: anime MKVs carry dozens of font
+            # attachments whose full stream dumps would be parsed for nothing.
+            "-show_entries", ENTRIES, path,
         ],
         capture_output=True,
         timeout=timeout,

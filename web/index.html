@@ -39,7 +39,11 @@
   </div>
   <div id="p-error" hidden></div>
   <div id="p-next-overlay" hidden>
-    <div>Up next: <b id="p-next-title"></b></div>
+    <div class="next-card">
+      <div class="img"><img id="p-next-img" alt="" onerror="this.style.visibility='hidden'"></div>
+      <div class="next-text"><div class="dim">Up next</div><div id="p-next-label"></div><div id="p-next-title"></div></div>
+      <div id="p-next-ring"><span id="p-next-count"></span></div>
+    </div>
     <div class="row"><button id="p-next-now">Play now</button><button id="p-next-cancel" class="ghost">Cancel</button></div>
   </div>
   <div id="p-bottom" class="p-ui">
@@ -51,6 +55,10 @@
       <span id="p-time">0:00 / 0:00</span>
       <span class="spacer"></span>
       <input id="p-volume" type="range" min="0" max="1" step="0.05" title="Volume">
+      <div class="menu-wrap">
+        <button id="p-speed-btn" class="ghost" title="Playback speed (&lt; / &gt;)">1×</button>
+        <div id="p-speed-menu" class="menu narrow" hidden></div>
+      </div>
       <div class="menu-wrap">
         <button id="p-audio-btn" class="ghost" title="Audio track">🔊</button>
         <div id="p-audio-menu" class="menu" hidden></div>

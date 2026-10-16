@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ctypes
 import json
 import logging
 import os
@@ -15,6 +16,15 @@ from .db import Database, item_id, series_id
 from .images import POSTER_NAMES, Images, find_image
 
 log = logging.getLogger("mediawatcher.scan")
+
+
+def release_memory() -> None:
+    """Hand freed heap back to the OS. glibc keeps it otherwise, so a scan's
+    row dicts would stay in RSS. A no-op where there is no glibc (musl, macOS)."""
+    try:
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except (OSError, AttributeError):
+        pass
 
 
 def walk_library(root: str):
@@ -128,6 +138,7 @@ class Scanner:
         finally:
             self.status.update(running=False, phase="idle")
             self._run_lock.release()
+            release_memory()
 
     def scan_library(self, lib: Library) -> None:
         root = lib.path
@@ -356,5 +367,6 @@ class Scanner:
             if not os.path.exists(self.images.cache_path("series", r["id"])):
                 self.images.series_image(r["id"])
         for r in self.db.query("SELECT id FROM items ORDER BY added_at DESC"):
-            if not os.path.exists(self.images.cache_path("item", r["id"])):
+            if not os.path.exists(self.images.cache_path("item", r["id"])) \
+                    and not self.images.failed("item", r["id"]):
                 self.images.item_image(r["id"])

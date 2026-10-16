@@ -31,6 +31,7 @@ class Config:
     max_height: int = 1080  # only applies when video must be transcoded
     video_crf: int = 21
     x264_preset: str = "veryfast"
+    transcode_threads: int = 4  # libx264 threads; 0 lets x264 pick (1.5 x cores)
     ffmpeg: str = "ffmpeg"
     ffprobe: str = "ffprobe"
     web_dir: str = ""
@@ -92,6 +93,7 @@ def load(env: dict[str, str] | None = None) -> Config:
         max_height=int(env.get("MAX_HEIGHT", "1080")),
         video_crf=int(env.get("VIDEO_CRF", "21")),
         x264_preset=env.get("X264_PRESET", "veryfast"),
+        transcode_threads=max(0, int(env.get("TRANSCODE_THREADS", "4"))),
         ffmpeg=env.get("FFMPEG", "ffmpeg"),
         ffprobe=env.get("FFPROBE", "ffprobe"),
         web_dir=env.get("WEB_DIR", os.path.join(os.path.dirname(here), "web")),

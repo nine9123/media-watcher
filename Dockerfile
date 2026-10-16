@@ -24,7 +24,8 @@ ENV PYTHONUNBUFFERED=1 \
     PORT=8097
 
 EXPOSE 8097
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
+# Each check starts a whole Python interpreter (~15 MB, some CPU), so not too often.
+HEALTHCHECK --interval=120s --timeout=5s --start-period=10s \
   CMD python -c "import os,urllib.request; urllib.request.urlopen('http://127.0.0.1:%s/healthz' % os.environ.get('PORT', '8097'), timeout=3)"
 
 CMD ["python", "-m", "mediawatcher"]

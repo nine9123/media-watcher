@@ -57,6 +57,9 @@ class App:
         self.session_token = hmac.new(cfg.api_key.encode(), b"mediawatcher-session",
                                       hashlib.sha256).hexdigest()
         self.streams: dict[str, subprocess.Popen] = {}
+        # Part of every view ETag, so a restart never matches an ETag that a
+        # browser kept from the previous process (generation restarts at 0).
+        self.boot = f"{time.time_ns():x}"
         self.streams_lock = threading.Lock()
 
     # ---- auth ------------------------------------------------------------
@@ -289,6 +292,12 @@ class App:
         audio = _q(query, "audio")
         audio_index = int(audio) if audio and audio.isdigit() else None
         force = _q(query, "force")
+        alang = (_q(query, "alang") or "").strip().lower()
+        if audio_index is None and alang:
+            # The language last picked by hand for this series, if the file has it.
+            same = [s for s in playback.audio_streams(item["streams"]) if s.get("language") == alang]
+            chosen = playback.pick_audio(same, [alang])
+            audio_index = chosen["index"] if chosen else None
         d = playback.decide(item, caps, self.cfg.audio_languages, audio_index, force)
 
         t_raw = _q(query, "t")
@@ -310,12 +319,14 @@ class App:
                 params["audio"] = str(d.audio_index)
             url = f"/stream/{iid}?" + urllib.parse.urlencode(params)
         prev_id, next_id = self.neighbours(r)
+        nxt = self.db.one(self.LIST_SQL + " WHERE i.id=?", (next_id,)) if next_id else None
         return {
             "item": self.item_json(r),
             "mode": d.mode, "reason": d.reason, "video": d.video, "audio": d.audio,
             "url": url, "start": start, "duration": r["duration"],
             "audio_tracks": playback.describe_audio(item["streams"]),
             "audio_index": d.audio_index, "prev_id": prev_id, "next_id": next_id,
+            "next": self.item_json(nxt) if nxt else None,
         }
 
     # ---- streams ---------------------------------------------------------
@@ -358,6 +369,9 @@ def route(method: str, pattern: str, auth: bool = True):
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     server_version = "mediawatcher"
+    # Idle keep-alive connections otherwise pin a thread each until the
+    # browser gives up. Video bodies lift this, see no_timeout().
+    timeout = 30
     app: App  # set on the subclass created by make_server
 
     def log_message(self, fmt, *args):
@@ -448,6 +462,23 @@ class Handler(BaseHTTPRequestHandler):
         self.send_bytes(body, "application/json; charset=utf-8", status,
                         {"Cache-Control": "no-store", **(headers or {})})
 
+    def send_view(self, make, extra: str = ""):
+        """JSON derived only from the database (plus `extra`): 304 while unchanged."""
+        etag = f'"{self.app.boot}-{self.app.db.generation}{extra}"'  # read before querying
+        headers = {"ETag": etag, "Cache-Control": "no-cache"}
+        if self.headers.get("If-None-Match") == etag:
+            self.send_response(304)
+            for k, v in headers.items():
+                self.send_header(k, v)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        self.send_json(make(), headers=headers)
+
+    def no_timeout(self) -> None:
+        """A paused player or a slow download must not be cut off by `timeout`."""
+        self.connection.settimeout(None)
+
     def send_static_file(self, path: str, ctype: str, cache: str):
         try:
             st = os.stat(path)
@@ -496,15 +527,17 @@ class Handler(BaseHTTPRequestHandler):
     # ---- browsing --------------------------------------------------------
     @route("GET", r"/api/home")
     def api_home(self):
-        self.send_json({**self.app.home(), "status": self.app.scanner.status})
+        status = dict(self.app.scanner.status)
+        tag = hashlib.sha1(json.dumps(status, sort_keys=True, default=str).encode()).hexdigest()[:8]
+        self.send_view(lambda: {**self.app.home(), "status": status}, "-" + tag)
 
     @route("GET", r"/api/libraries/([^/]+)")
     def api_library(self, name):
-        self.send_json(self.app.library(name))
+        self.send_view(lambda: self.app.library(name))
 
     @route("GET", r"/api/series/([0-9a-f]+)")
     def api_series(self, sid):
-        self.send_json(self.app.series(sid))
+        self.send_view(lambda: self.app.series(sid))
 
     @route("GET", r"/api/items/([0-9a-f]+)")
     def api_item(self, iid):
@@ -629,7 +662,11 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             if self.command == "HEAD":
                 return
-            self.connection.sendfile(f, start, end - start + 1)
+            self.no_timeout()
+            try:
+                self.connection.sendfile(f, start, end - start + 1)
+            finally:
+                self.connection.settimeout(self.timeout)  # back to idle keep-alive rules
 
     @route("GET", r"/stream/([0-9a-f]+)")
     def stream(self, iid):
@@ -678,6 +715,7 @@ class Handler(BaseHTTPRequestHandler):
         threading.Thread(target=drain, daemon=True).start()
         sid = _q(self.query, "sid") or ""
         app.register_stream(sid, proc)
+        self.no_timeout()  # Connection: close, so there is nothing to restore
         sent = 0
         try:
             while True:

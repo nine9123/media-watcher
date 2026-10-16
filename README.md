@@ -11,7 +11,8 @@ actors, no user management, no subtitles.
   by itself (direct → remux → full transcode) instead of buffering forever.
 - **Japanese audio, always.** The audio track is auto-selected: preferred
   language first (`AUDIO_LANGUAGES`, default Japanese), commentary tracks
-  last, then the default flag. You can still switch track in the player.
+  last, then the default flag. You can still switch track in the player;
+  the language you pick is remembered for the rest of that series.
 - **Never shows subtitles.** Subtitle streams are never sent to the browser,
   in any mode.
 - **Fast.** Standard-library Python + SQLite + ffmpeg, no framework. Library
@@ -19,6 +20,8 @@ actors, no user management, no subtitles.
   downscaled on the SSD so grids never pull full-size images over SMB.
 - **Watch progress.** Resume, continue watching, next up, auto-play next
   episode, mark watched/unwatched per episode or season.
+- **Light on the NAS.** A remux or transcode paused for 3 minutes stops its
+  ffmpeg process; pressing play restarts it at the same spot.
 - **Download button** on every file, plus a direct URL for VLC/mpv for when
   you want to play the original.
 
@@ -79,6 +82,7 @@ LIBRARIES=Anime=/media/anime:shows;TV=/media/tv:shows;Movies=/media/movies:movie
 | `MAX_HEIGHT`      | `1080`                | Transcodes are scaled down to this; copied video is untouched |
 | `VIDEO_CRF`       | `21`                  | x264 quality for transcodes |
 | `X264_PRESET`     | `veryfast`            | Use `superfast`/`ultrafast` on a weak CPU |
+| `TRANSCODE_THREADS` | `4`                 | libx264 threads per transcode; `0` lets x264 choose (more RAM) |
 | `SCAN_INTERVAL`   | `1800`                | Seconds between scans, `0` = only on start and on demand |
 | `PROBE_WORKERS`   | `4`                   | Parallel ffprobe processes during scans |
 | `THUMB_WORKERS`   | `2`                   | Parallel thumbnail generators |
@@ -139,7 +143,8 @@ match), so jumping around a two-hour movie is instant, not a long buffer.
 ## Player keys
 
 `Space`/`K` play/pause · `←`/`→` 10 s · `J`/`L` 30 s · `↑`/`↓` volume ·
-`F` fullscreen · `M` mute · `N` next episode · `Esc` back
+`F` fullscreen · `M` mute · `N` next episode · `<`/`>` slower/faster ·
+`Esc` back
 
 ## External players
 
