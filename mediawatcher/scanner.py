@@ -340,9 +340,10 @@ class Scanner:
             return False
         self.db.write(
             "UPDATE items SET probed=1, probe_error=NULL, duration=?, start_time=?, container=?, "
-            "video_codec=?, width=?, height=?, pix_fmt=?, streams=? WHERE id=?",
+            "video_codec=?, width=?, height=?, pix_fmt=?, streams=?, skips=? WHERE id=?",
             (info["duration"], info["start_time"], info["container"], info["video_codec"],
-             info["width"], info["height"], info["pix_fmt"], json.dumps(info["streams"]), iid),
+             info["width"], info["height"], info["pix_fmt"], json.dumps(info["streams"]),
+             json.dumps(info["skips"]), iid),
         )
         return True
 

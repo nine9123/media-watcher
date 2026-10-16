@@ -45,7 +45,8 @@ CREATE TABLE IF NOT EXISTS items (
     width INTEGER,
     height INTEGER,
     pix_fmt TEXT,
-    streams TEXT
+    streams TEXT,
+    skips TEXT
 );
 CREATE INDEX IF NOT EXISTS items_series ON items(series_id, season, episode);
 CREATE INDEX IF NOT EXISTS items_library ON items(library, kind);
@@ -105,6 +106,13 @@ class Database:
         with self.conn() as c:
             c.executescript(LIBRARY_SCHEMA)
             c.executescript(STATE_SCHEMA)
+            cols = {r["name"] for r in c.execute("PRAGMA table_info(items)")}
+            if "skips" not in cols:
+                # Intro/credits chapters arrived later: probe everything once
+                # more so existing libraries get them too.
+                c.execute("ALTER TABLE items ADD COLUMN skips TEXT")
+                c.execute("UPDATE items SET probed=0 WHERE probed=1")
+                c.commit()
 
     def _open(self) -> sqlite3.Connection:
         c = sqlite3.connect(self.library_path, timeout=30, check_same_thread=False)

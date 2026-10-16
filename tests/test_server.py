@@ -346,3 +346,60 @@ def test_idle_keepalive_connection_is_closed(env, monkeypatch):
     c.sock.settimeout(5)
     assert c.sock.recv(1) == b""  # server hung up instead of waiting for the next request
     c.close()
+
+
+def test_next_up_follows_the_furthest_watched_episode(env):
+    sid = get_json(env, "/api/libraries/Shows")["series"][0]["id"]
+    eps = {(e["season"], e["episode"]): e["id"] for e in get_json(env, f"/api/series/{sid}")["episodes"]}
+    req(env, "POST", f"/api/items/{eps[(0, 1)]}/watched", {"watched": True})
+    assert get_json(env, "/api/home")["next_up"] == []  # a watched special starts nothing
+    req(env, "POST", f"/api/items/{eps[(1, 2)]}/watched", {"watched": True})
+    req(env, "POST", f"/api/items/{eps[(1, 3)]}/watched", {"watched": True})
+    assert [n["id"] for n in get_json(env, "/api/home")["next_up"]] == [eps[(2, 1)]]
+    req(env, "POST", f"/api/items/{eps[(2, 1)]}/watched", {"watched": True})
+    assert get_json(env, "/api/home")["next_up"] == []  # E01 skipped long ago does not come back
+
+
+def test_problems_lists_unreadable_files_and_missing_libraries(env):
+    # ffprobe is missing in these tests, so every file failed to probe.
+    home = get_json(env, "/api/home")
+    assert home["problems"] == 6
+    d = get_json(env, "/api/problems")
+    assert len(d["files"]) == 6 and d["missing"] == []
+    heat = next(f for f in d["files"] if f["library"] == "Movies")
+    assert heat["path"] == "Heat (1995)/Heat (1995).mp4" and heat["error"]
+
+    os.rename(env["movies"], env["movies"] + ".gone")
+    env["scanner"].scan()
+    d = get_json(env, "/api/problems")
+    assert d["missing"] == [{"name": "Movies", "path": env["movies"]}]
+    assert "Movies" in d["last_error"]
+
+
+def test_playback_info_has_skips(env):
+    mid = get_json(env, "/api/libraries/Movies")["movies"][0]["id"]
+    streams = [{"index": 0, "type": "video", "codec": "h264", "pix_fmt": "yuv420p", "profile": "High"},
+               {"index": 1, "type": "audio", "codec": "aac", "language": "", "title": "", "channels": 2}]
+    skips = [{"kind": "intro", "start": 60.0, "end": 150.0}]
+    env["db"].write("UPDATE items SET probed=1, duration=6000, container='mov,mp4,m4a,3gp,3g2,mj2', "
+                    "streams=?, skips=? WHERE id=?", (json.dumps(streams), json.dumps(skips), mid))
+    assert get_json(env, f"/api/items/{mid}/playback")["skips"] == skips
+
+
+def test_old_library_db_gains_skips_and_is_reprobed(tmp_path):
+    import sqlite3
+
+    from mediawatcher.db import LIBRARY_SCHEMA
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    c = sqlite3.connect(cache / "library.db")
+    c.executescript(LIBRARY_SCHEMA.replace(",\n    skips TEXT", ""))  # before skips existed
+    c.executemany("INSERT INTO items(id, library, rel_path, path, size, mtime, kind, title, "
+                  "sort_name, added_at, probed) VALUES(?,'L',?,?,1,1,'movie','t','t',1,?)",
+                  [("a", "a", "/a", 1), ("b", "b", "/b", 2)])
+    c.commit()
+    c.close()
+    db = Database(str(cache), str(tmp_path / "config"))
+    rows = {r["id"]: r for r in db.query("SELECT id, probed, skips FROM items")}
+    assert rows["a"]["probed"] == 0 and rows["b"]["probed"] == 2 and rows["a"]["skips"] is None
+    Database(str(cache), str(tmp_path / "config"))  # second open: no reset again

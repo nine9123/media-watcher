@@ -56,6 +56,18 @@ h2 { font-size: 1.15rem; margin: 1.4rem 0 .6rem; }
 
 .toolbar { display: flex; gap: .6rem; align-items: center; margin: .4rem 0 1rem; flex-wrap: wrap; }
 .toolbar h1 { font-size: 1.4rem; margin: 0 1rem 0 0; }
+.jump { display: flex; flex-wrap: wrap; gap: .15rem; margin: -.4rem 0 1rem; }
+.jump button { background: transparent; color: var(--dim); padding: .15em .45em; font-size: .85em; }
+.jump button:hover { background: var(--bg3); color: var(--fg); }
+.grid > .card { scroll-margin-top: 5rem; }
+a#scan-status[href] { color: #ff8b8b; }
+a#scan-status[href]:hover { text-decoration: underline; }
+.notice { display: inline-block; margin-top: .6rem; color: #ff8b8b; }
+.notice:hover { text-decoration: underline; }
+.problems { display: flex; flex-direction: column; gap: .4rem; }
+.problems > div { background: var(--bg2); border-radius: var(--radius); padding: .6rem .8rem; }
+.problems .file { word-break: break-all; }
+.problems .why { color: var(--dim); font-size: .85em; margin-top: .2rem; word-break: break-word; }
 
 .series-head { display: flex; gap: 1.4rem; align-items: flex-end; margin: .6rem 0 1rem; }
 .series-head .poster { width: 10rem; aspect-ratio: 2/3; border-radius: var(--radius); background: var(--bg2);
@@ -128,6 +140,9 @@ h2 { font-size: 1.15rem; margin: 1.4rem 0 .6rem; }
 @keyframes spin { to { transform: rotate(360deg); } }
 #p-error { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); background: rgba(0,0,0,.85);
   padding: 1rem 1.4rem; border-radius: var(--radius); max-width: 90vw; text-align: center; }
+#p-skip { position: absolute; right: 1.5rem; bottom: 6.5rem; background: rgba(20,21,25,.9);
+  border: 1px solid rgba(255,255,255,.35); padding: .6em 1.2em; font-weight: 600; z-index: 1; }
+#p-skip:hover { background: var(--fg); color: var(--bg); }
 #p-next-overlay { position: absolute; right: 1.5rem; bottom: 6.5rem; background: rgba(20,21,25,.95);
   padding: 1rem 1.2rem; border-radius: var(--radius); }
 #p-next-overlay .row { display: flex; gap: .5rem; margin-top: .7rem; }

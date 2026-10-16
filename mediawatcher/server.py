@@ -180,25 +180,24 @@ class App:
         cont_ids = {r["id"] for r in cont}
         cont_series = {r["series_id"] for r in cont if r["series_id"]}
 
-        # Next up: for recently active series, the episode after the furthest watched one.
-        active = self.db.query(
-            "SELECT i.series_id AS sid, MAX(p.updated_at) AS t FROM items i "
+        # Next up: for recently active series, the first unwatched episode after
+        # the furthest watched one (specials aside). One query for all of them.
+        rows = self.db.query(
+            "WITH active AS (SELECT i.series_id AS sid, MAX(p.updated_at) AS t FROM items i "
             "JOIN st.progress p ON p.id=i.id WHERE i.series_id IS NOT NULL "
-            "GROUP BY i.series_id ORDER BY t DESC LIMIT 30")
-        next_up = []
-        for a in active:
-            if a["sid"] in cont_series:
-                continue
-            eps = [e for e in self.episode_order(a["sid"]) if e["season"] != 0]
-            last = max((n for n, e in enumerate(eps) if e["watched"]), default=None)
-            if last is None:
-                continue
-            nxt = next((e for e in eps[last + 1:] if not e["watched"]), None)
-            if nxt is not None and nxt["id"] not in cont_ids:
-                next_up.append(self.item_json(
-                    self.db.one(self.LIST_SQL + " WHERE i.id=?", (nxt["id"],))))
-            if len(next_up) >= 24:
-                break
+            "GROUP BY i.series_id ORDER BY t DESC LIMIT 30), "
+            "eps AS (SELECT i.id, a.sid, a.t, COALESCE(p.watched,0) AS watched, "
+            "ROW_NUMBER() OVER (PARTITION BY a.sid " + self.EPISODE_ORDER + ") AS n "
+            "FROM active a JOIN items i ON i.series_id=a.sid LEFT JOIN st.progress p ON p.id=i.id "
+            "WHERE i.season IS NOT 0), "
+            "marked AS (SELECT id, sid, t, watched, n, "
+            "MAX(CASE WHEN watched THEN n END) OVER (PARTITION BY sid) AS last FROM eps), "
+            "nxt AS (SELECT id, t, ROW_NUMBER() OVER (PARTITION BY sid ORDER BY n) AS k "
+            "FROM marked WHERE NOT watched AND n>last) " +
+            self.LIST_SQL.replace(" FROM items i ", " FROM nxt JOIN items i ON i.id=nxt.id ", 1) +
+            " WHERE nxt.k=1 ORDER BY nxt.t DESC")
+        next_up = [self.item_json(r) for r in rows
+                   if r["series_id"] not in cont_series and r["id"] not in cont_ids][:24]
 
         # Recently added: newest series (by their newest episode) and movies,
         # grouped in SQL so only the 24 rows shown come back to Python.
@@ -223,6 +222,7 @@ class App:
             "next_up": next_up,
             "recent": recent,
             "libraries": self.libraries(),
+            "problems": self.db.one("SELECT COUNT(*) AS n FROM items WHERE probed=2")["n"],
         }
 
     def libraries(self) -> list[dict]:
@@ -284,6 +284,22 @@ class App:
             "OR i.rel_path LIKE ? ESCAPE '\\') ORDER BY i.sort_name LIMIT 50", (like, like))
         return {"series": [dict(r) for r in series], "movies": [self.item_json(r) for r in movies]}
 
+    def problems(self) -> dict:
+        """Files ffprobe could not read, and library folders that are not there."""
+        files = self.db.query(
+            "SELECT i.id, i.library, i.rel_path, i.probe_error, s.title AS series_title "
+            "FROM items i LEFT JOIN series s ON s.id=i.series_id WHERE i.probed=2 "
+            "ORDER BY i.library, i.rel_path LIMIT 500")
+        return {
+            "files": [{"id": r["id"], "library": r["library"], "path": r["rel_path"],
+                       "series_title": r["series_title"], "error": r["probe_error"]}
+                      for r in files],
+            "missing": [{"name": lib.name, "path": lib.path} for lib in self.cfg.libraries
+                        if not os.path.isdir(lib.path)],
+            "last_error": self.scanner.status.get("error"),
+            "running": self.scanner.status.get("running"),
+        }
+
     def playback_info(self, iid: str, query: dict) -> dict:
         r = self.ensure_probed(self.get_item(iid))
         item = dict(r)
@@ -327,6 +343,7 @@ class App:
             "audio_tracks": playback.describe_audio(item["streams"]),
             "audio_index": d.audio_index, "prev_id": prev_id, "next_id": next_id,
             "next": self.item_json(nxt) if nxt else None,
+            "skips": json.loads(r["skips"] or "[]"),
         }
 
     # ---- streams ---------------------------------------------------------
@@ -550,6 +567,10 @@ class Handler(BaseHTTPRequestHandler):
     @route("GET", r"/api/search")
     def api_search(self):
         self.send_json(self.app.search(_q(self.query, "q") or ""))
+
+    @route("GET", r"/api/problems")
+    def api_problems(self):
+        self.send_json(self.app.problems())
 
     @route("GET", r"/api/status")
     def api_status(self):
