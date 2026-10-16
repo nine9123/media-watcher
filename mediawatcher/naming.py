@@ -279,7 +279,6 @@ def _parse_episode(stem: str, dirs: list[str], library_type: str, siblings: int)
         d = _match_episode(dirs[-1])
         if d is not None:
             found = ("", d[1], d[2], d[3], "")
-    in_season_dir = bool(dirs) and season_from_dir(dirs[-1]) is not None
     # Any folder naming a season ("Season 1 (2019)", "Show.S01.1080p-GRP")
     # means everything below it is an episode, numbered or not.
     under_season = any(season_in_dir(d) is not None for d in dirs)
