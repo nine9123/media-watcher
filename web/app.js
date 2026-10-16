@@ -67,10 +67,11 @@ function movieCard(m) {
   return `<a class="card" href="#/play/${m.id}"><div class="img">${badge}${esc(m.title)}${img("/img/item/" + m.id)}${bar(pct(m))}</div>
     <div class="t" title="${esc(m.title)}">${esc(m.title)}</div><div class="s">${esc(sub)}</div></a>`;
 }
-function itemCard(it) {
+function itemCard(it, removable = false) {
   const title = it.series_title || it.title;
   const sub = it.series_title ? [epLabel(it), it.title].filter(Boolean).join(" · ") : fmtDur(it.duration);
-  return `<a class="card wide" href="#/play/${it.id}"><div class="img">${esc(title)}${img("/img/item/" + it.id)}${bar(pct(it))}</div>
+  const x = removable ? `<button class="unresume" data-unresume="${it.id}" title="Remove from Continue watching">×</button>` : "";
+  return `<a class="card wide" href="#/play/${it.id}"><div class="img">${x}${esc(title)}${img("/img/item/" + it.id)}${bar(pct(it))}</div>
     <div class="t" title="${esc(title)}">${esc(title)}</div><div class="s" title="${esc(sub)}">${esc(sub)}</div></a>`;
 }
 
@@ -104,7 +105,7 @@ function viewHome() {
     const row = (title, items, fn, cls = "row-scroll") => items.length
       ? `<h2>${title}</h2><div class="${cls}">${items.map(fn).join("")}</div>` : "";
     const recent = (r) => r.type === "series" ? seriesCard(r) : movieCard(r);
-    let html = row("Continue watching", d.continue, itemCard) + row("Next up", d.next_up, itemCard)
+    let html = row("Continue watching", d.continue, (it) => itemCard(it, true)) + row("Next up", d.next_up, (it) => itemCard(it))
       + row("Recently added", d.recent, recent, "grid");
     if (!html) {
       html = `<p class="empty">${d.libraries.length ? "Nothing here yet. The first scan may still be running." :
@@ -114,6 +115,17 @@ function viewHome() {
     if (restore) restoreScroll();
   });
 }
+
+// The × on a Continue watching card forgets the position, so it drops off the row.
+view.addEventListener("click", async (e) => {
+  const b = e.target.closest("[data-unresume]");
+  if (!b) return;
+  e.preventDefault();
+  b.closest(".card").remove();
+  try { await api(`/api/items/${b.dataset.unresume}/progress`, { body: { position: 0 } }); } catch (err) { /* re-rendered below */ }
+  cache.clear();
+  if (currentRoute === "/") viewHome();
+});
 
 function viewLibrary(name) {
   const key = "/lib/" + name;
@@ -322,6 +334,22 @@ const CAPS = (() => {
 
 // ------------------------------------------------------------ player ---
 const video = $("#video");
+const RATES = [0.75, 1, 1.25, 1.5, 1.75, 2];
+// A paused remux/transcode keeps ffmpeg and its few hundred MB alive. After
+// this long the stream is dropped and restarted from the same spot on play.
+const PARK_AFTER = 3 * 60 * 1000;
+
+// Series id for an item, from views already loaded, so the remembered audio
+// language can go along with the very first playback request.
+function seriesOf(id) {
+  for (const { data } of cache.values()) {
+    for (const list of [data.continue, data.next_up, data.episodes]) {
+      const it = (list || []).find((x) => x.id === id);
+      if (it) return it.series_id || null;
+    }
+  }
+  return null;
+}
 const Player = {
   active: false,
   id: null,
@@ -332,6 +360,9 @@ const Player = {
   audioIndex: null,
   token: 0,
   pendingSeek: null,
+  parked: false,      // stream dropped while paused; play() restarts it
+  rate: 1,
+  seriesHint: null,
   sid: Math.random().toString(36).slice(2, 12),
   timers: {},
 
@@ -346,6 +377,8 @@ const Player = {
   open(id) {
     if (this.active && this.id === id) return;
     if (this.active) this.report();
+    const prev = this.info;
+    this.seriesHint = (prev && prev.next && prev.next.id === id ? prev.next.series_id : null) || seriesOf(id);
     this.stopStream();
     this.active = true;
     this.id = id;
@@ -388,6 +421,8 @@ const Player = {
 
   async load(t) {
     const token = ++this.token;
+    this.parked = false;
+    clearTimeout(this.timers.park);
     const q = new URLSearchParams({ sid: this.sid });
     if (t != null) q.set("t", t.toFixed(2));
     const compat = localStorage.getItem("compat") === "1";
@@ -395,6 +430,9 @@ const Player = {
     if (this.attempt === 1) q.set("force", "remux");
     if (this.attempt >= 2) q.set("force", "transcode");
     if (this.audioIndex != null) q.set("audio", this.audioIndex);
+    const auto = this.audioIndex == null;
+    const hintLang = this.seriesHint && localStorage.getItem("audio:" + this.seriesHint);
+    if (auto && hintLang) q.set("alang", hintLang);
     $("#spinner").hidden = false;
     let info;
     try {
@@ -404,12 +442,22 @@ const Player = {
       return;
     }
     if (token !== this.token || !this.active) return;
+    const lang = auto && info.item.series_id && localStorage.getItem("audio:" + info.item.series_id);
+    const cur = info.audio_tracks.find((x) => x.index === info.audio_index);
+    const want = lang && cur && cur.language !== lang && info.audio_tracks.find((x) => x.language === lang);
+    if (want) {
+      // The series was not known up front (deep link): ask again with the remembered track.
+      this.audioIndex = want.index;
+      this.load(t);
+      return;
+    }
     this.info = info;
     this.audioIndex = info.audio_index;
     this.offset = info.mode === "direct" ? 0 : info.start;
     this.pendingSeek = null;
     this.renderInfo();
     video.src = info.url;
+    video.defaultPlaybackRate = video.playbackRate = this.rate;
     if (info.mode === "direct" && info.start > 0) {
       video.addEventListener("loadedmetadata", () => { video.currentTime = info.start; }, { once: true });
     }
@@ -440,6 +488,40 @@ const Player = {
     } else {
       this.fail(`This file could not be played (${why}). Try the download button.`);
     }
+  },
+
+  play() {
+    if (this.parked) { this.load(this.pendingSeek); return; }
+    video.play().catch(() => {});
+  },
+  togglePlay() { video.paused ? this.play() : video.pause(); },
+
+  armPark() {
+    clearTimeout(this.timers.park);
+    if (!this.info || this.info.mode === "direct" || this.parked) return;  // direct play costs nothing paused
+    const token = this.token;
+    this.timers.park = setTimeout(() => {
+      if (token !== this.token || !this.active || !video.paused) return;
+      const t = this.time();
+      this.stopStream();
+      this.pendingSeek = t;  // time() keeps reporting the paused position
+      this.parked = true;
+    }, PARK_AFTER);
+  },
+
+  setRate(r) {
+    this.rate = r;
+    video.defaultPlaybackRate = video.playbackRate = r;
+    this.renderRate();
+  },
+  stepRate(dir) {
+    const i = RATES.indexOf(this.rate);
+    this.setRate(RATES[Math.max(0, Math.min(RATES.length - 1, (i < 0 ? 1 : i) + dir))]);
+  },
+  renderRate() {
+    $("#p-speed-btn").textContent = `${this.rate}×`;
+    $("#p-speed-menu").innerHTML = RATES.map((r) =>
+      `<button data-rate="${r}" class="${r === this.rate ? "active" : ""}">${r}×</button>`).join("");
   },
 
   fail(msg) {
@@ -519,14 +601,24 @@ const Player = {
     }
     this.report(true);
     if (!this.info.next_id) { history.back(); return; }
-    let left = 8;
+    const total = 8;
+    let left = total;
     const it = this.info;
-    $("#p-next-title").textContent = `${left}s`;
+    const n = it.next || {};
+    $("#p-next-img").style.visibility = "";
+    $("#p-next-img").src = `/img/item/${it.next_id}`;
+    $("#p-next-label").textContent = epLabel(n);
+    $("#p-next-title").textContent = n.title || "";
+    const draw = () => {
+      $("#p-next-count").textContent = left;
+      $("#p-next-ring").style.setProperty("--p", left / total);
+    };
+    draw();
     $("#p-next-overlay").hidden = false;
     const tick = () => {
       if (!this.active || this.info !== it) return;
       left -= 1;
-      $("#p-next-title").textContent = `${left}s`;
+      draw();
       if (left <= 0) this.go(it.next_id);
       else this.timers.next = setTimeout(tick, 1000);
     };
@@ -543,7 +635,7 @@ const Player = {
     p.classList.remove("idle");
     clearTimeout(this.timers.idle);
     this.timers.idle = setTimeout(() => {
-      if (!video.paused && $("#p-audio-menu").hidden) p.classList.add("idle");
+      if (!video.paused && $("#p-audio-menu").hidden && $("#p-speed-menu").hidden) p.classList.add("idle");
     }, 3000);
   },
 
@@ -562,8 +654,8 @@ video.addEventListener("playing", () => {
   Player.renderPlay();
 });
 video.addEventListener("waiting", () => { $("#spinner").hidden = false; });
-video.addEventListener("pause", () => { Player.renderPlay(); Player.report(); Player.poke(); });
-video.addEventListener("play", () => Player.renderPlay());
+video.addEventListener("pause", () => { Player.renderPlay(); Player.report(); Player.poke(); Player.armPark(); });
+video.addEventListener("play", () => { clearTimeout(Player.timers.park); Player.renderPlay(); });
 video.addEventListener("timeupdate", () => Player.renderTime());
 video.addEventListener("progress", () => Player.renderTime());
 video.addEventListener("ended", () => Player.ended());
@@ -578,7 +670,7 @@ video.addEventListener("volumechange", () => {
 });
 setInterval(() => { if (Player.active && !video.paused) Player.report(); }, 10000);
 
-$("#p-play").onclick = () => (video.paused ? video.play() : video.pause());
+$("#p-play").onclick = () => Player.togglePlay();
 $("#p-back").onclick = () => (history.length > 1 ? history.back() : (location.hash = "#/"));
 $("#p-next").onclick = () => { Player.report(); Player.go(Player.info && Player.info.next_id); };
 $("#p-prev").onclick = () => { Player.report(); Player.go(Player.info && Player.info.prev_id); };
@@ -587,18 +679,42 @@ $("#p-volume").value = localStorage.getItem("volume") ?? 1;
 $("#p-volume").oninput = (e) => { video.muted = false; video.volume = Number(e.target.value); };
 $("#p-next-now").onclick = () => Player.go(Player.info.next_id);
 $("#p-next-cancel").onclick = () => { clearTimeout(Player.timers.next); $("#p-next-overlay").hidden = true; };
-$("#p-audio-btn").onclick = (e) => { e.stopPropagation(); $("#p-audio-menu").hidden = !$("#p-audio-menu").hidden; };
+$("#p-audio-btn").onclick = (e) => {
+  e.stopPropagation();
+  $("#p-speed-menu").hidden = true;
+  $("#p-audio-menu").hidden = !$("#p-audio-menu").hidden;
+};
 $("#p-audio-menu").onclick = (e) => {
   const b = e.target.closest("button");
   if (!b) return;
   $("#p-audio-menu").hidden = true;
   Player.audioIndex = Number(b.dataset.index);
+  // Remember the language for the rest of the series.
+  const sid = Player.info && Player.info.item.series_id;
+  const track = Player.info && Player.info.audio_tracks.find((x) => x.index === Player.audioIndex);
+  if (sid && track && track.language) localStorage.setItem("audio:" + sid, track.language);
+  else if (sid) localStorage.removeItem("audio:" + sid);
   Player.load(Player.time());
 };
+$("#p-speed-btn").onclick = (e) => {
+  e.stopPropagation();
+  $("#p-audio-menu").hidden = true;
+  $("#p-speed-menu").hidden = !$("#p-speed-menu").hidden;
+};
+$("#p-speed-menu").onclick = (e) => {
+  const b = e.target.closest("button");
+  if (!b) return;
+  $("#p-speed-menu").hidden = true;
+  Player.setRate(Number(b.dataset.rate));
+};
+Player.renderRate();
 
 video.addEventListener("click", () => {
-  if (!$("#p-audio-menu").hidden) { $("#p-audio-menu").hidden = true; return; }
-  video.paused ? video.play() : video.pause();
+  if (!$("#p-audio-menu").hidden || !$("#p-speed-menu").hidden) {
+    $("#p-audio-menu").hidden = $("#p-speed-menu").hidden = true;
+    return;
+  }
+  Player.togglePlay();
 });
 video.addEventListener("dblclick", () => Player.toggleFullscreen());
 $("#player").addEventListener("pointermove", () => Player.poke());
@@ -627,13 +743,14 @@ document.addEventListener("keydown", (e) => {
   if (!Player.active || e.target.tagName === "INPUT") return;
   const k = e.key;
   const step = (s) => Player.seek(Player.time() + s);
-  if (k === " " || k === "k") video.paused ? video.play() : video.pause();
+  if (k === " " || k === "k") Player.togglePlay();
   else if (k === "ArrowRight" || k === "l") step(k === "l" ? 30 : 10);
   else if (k === "ArrowLeft" || k === "j") step(k === "j" ? -30 : -10);
   else if (k === "ArrowUp") video.volume = Math.min(1, video.volume + 0.05);
   else if (k === "ArrowDown") video.volume = Math.max(0, video.volume - 0.05);
   else if (k === "f") Player.toggleFullscreen();
   else if (k === "m") video.muted = !video.muted;
+  else if (k === "<" || k === ">") Player.stepRate(k === ">" ? 1 : -1);
   else if (k === "n" && Player.info && Player.info.next_id) { Player.report(); Player.go(Player.info.next_id); }
   else if (k === "Escape" && !document.fullscreenElement) $("#p-back").click();
   else return;
@@ -642,7 +759,7 @@ document.addEventListener("keydown", (e) => {
 });
 
 if ("mediaSession" in navigator) {
-  navigator.mediaSession.setActionHandler("play", () => video.play());
+  navigator.mediaSession.setActionHandler("play", () => Player.play());
   navigator.mediaSession.setActionHandler("pause", () => video.pause());
   navigator.mediaSession.setActionHandler("seekforward", () => Player.seek(Player.time() + 10));
   navigator.mediaSession.setActionHandler("seekbackward", () => Player.seek(Player.time() - 10));

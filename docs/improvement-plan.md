@@ -17,11 +17,34 @@ missing piece is Safari/iOS (HLS). The cheapest high-value features are
 skip-intro from MKV chapters, a remembered audio track per series, and a
 proper "Up next" card.
 
+## Progress
+
+Done on 2026-10-16: steps 1–3 of the suggested order, plus 1.4 and 1.5
+from step 5. Items marked **(done)** below. Still open: 2.3, 2.4, UX 4–6
+and 8–18.
+
+Measured in the dev container (16 cores, so the x264 numbers are larger
+than on a 4-core NAS; the ratio is what matters):
+
+| What | Before | After |
+|------|--------|-------|
+| 1.2: one 1080p 10-bit HEVC→H.264 transcode, peak RSS (`ru_maxrss`) | 854 MB | 480 MB (`TRANSCODE_THREADS=4`), 441 MB (`=2`) |
+| 1.2: same transcode, speed | 3.9× realtime | 5.7× realtime |
+| 2.1: `/api/libraries/<name>`, 2,400 episodes, 10 clients | 800 req/s, p50 10.4 ms | 4,890 req/s, p50 1.9 ms (304) |
+| 2.1: `/api/series/<id>`, 10 clients | 1,115 req/s, p50 7.9 ms | 4,850 req/s, p50 1.9 ms (304) |
+| 2.1: `/api/home`, 10 clients | 970 req/s, p50 7.3 ms | 4,620 req/s, p50 2.1 ms (304) |
+| 1.5: ffprobe JSON per file | 2.2–6.3 KB | 1.2–3.9 KB, same `summarize()` output |
+
+1.1 was checked in headless Chromium against a 15-minute remuxed MKV.
+After a pause, the ffmpeg process went away once the timer fired. Play
+restarted the stream from the keyframe before the paused position. The
+peak-RSS numbers for 1.1/1.3/1.4 on the real NAS are still to be taken.
+
 ---
 
 ## 1. RAM
 
-### 1.1 Kill ffmpeg when the player has been paused a while (S, high impact)
+### 1.1 Kill ffmpeg when the player has been paused a while (S, high impact) (done)
 
 `server.py` `stream()` keeps ffmpeg running for as long as the socket is
 open. When the video is paused, the browser stops reading and ffmpeg
@@ -38,7 +61,7 @@ path already exists: it is the same `load(t)` that seeking uses.
 Don't use a server-side socket timeout for this (see 1.3): it would also
 kill streams during long buffering.
 
-### 1.2 Cap x264's threads and lookahead (S, high impact on transcodes)
+### 1.2 Cap x264's threads and lookahead (S, high impact on transcodes) (done)
 
 `playback.ffmpeg_args()` lets libx264 pick its own thread count, which is
 1.5 × cores, with frame threads that each hold their own buffers, plus a
@@ -53,7 +76,7 @@ NAS for CPU.
   with `/usr/bin/time -v`. Check that the frame rate stays above 1×
   realtime on the target NAS.
 
-### 1.3 Don't let idle keep-alive connections pin threads (S)
+### 1.3 Don't let idle keep-alive connections pin threads (S) (done)
 
 `Handler` inherits `timeout = None` from `StreamRequestHandler`. Each
 idle browser keep-alive connection (about 6 per tab) keeps a thread
@@ -64,7 +87,7 @@ Set `timeout = 30` on `Handler`. In `stream()` and `file()`, call
 `self.connection.settimeout(None)` before sending the body, so a paused
 player or a slow download is never cut off by it.
 
-### 1.4 Hand freed memory back after a scan (S)
+### 1.4 Hand freed memory back after a scan (S) (done)
 
 `Scanner.scan_library()` builds every row of a library as a dict, along
 with `existing`, `dirs` and the statement list. For a 30k-file library
@@ -73,7 +96,7 @@ OS. After `scan()` finishes, call `ctypes.CDLL("libc.so.6").malloc_trim(0)`
 inside a `try`, so it is a no-op on musl or other platforms. It's a
 one-liner, and the gain shows up in `VmRSS` right after a scan.
 
-### 1.5 Smaller things
+### 1.5 Smaller things (done)
 
 - **SQLite page cache.** Each of up to 4 pooled connections can grow to
   16 MB (`cache_size=-16000`). That is harmless while `library.db` is
@@ -104,7 +127,7 @@ but after 1.1 and 1.2 the server process is not where the RAM goes.
 
 ## 2. Performance
 
-### 2.1 Conditional GETs for the JSON views (M, biggest win for page loads)
+### 2.1 Conditional GETs for the JSON views (M, biggest win for page loads) (done)
 
 The UI already shows the cached copy first and then re-fetches
 (`cached()` in `app.js`). Every navigation still costs the server a full
@@ -124,7 +147,7 @@ A library page then costs about one dict lookup on revisit. Measure with
 `.claude-task/tools/loadtest.py` against `/api/libraries/<name>`, sending
 the header.
 
-### 2.2 Negative cache for images that cannot be made (S)
+### 2.2 Negative cache for images that cannot be made (S) (done)
 
 When a thumbnail cannot be grabbed (broken file, audio-only file, ffmpeg
 timeout), `Images.item_image()` returns `None` and keeps nothing. Every
@@ -180,17 +203,17 @@ Ordered by value for effort.
 
 ### Quick wins (S each)
 
-1. **A real "Up next" card.** The end-of-episode overlay shows
+1. **(done) A real "Up next" card.** The end-of-episode overlay shows
    `Up next: 8s`. `#p-next-title` is filled with the countdown, not the
    title. Add `next` (title, episode label, id) to the `playback_info()`
    response and show the thumbnail, `S01E06 · Title` and a countdown ring.
-2. **Remember the audio track per series.** When you switch to a
+2. **(done) Remember the audio track per series.** When you switch to a
    different track, the next episode goes back to auto-pick. Store the
    chosen track's language and title in `localStorage` under
    `audio:<series_id>`. On load, pass the matching index once
    `audio_tracks` is known, or have the server match by language: add an
    `alang` query parameter to `decide()`.
-3. **Playback speed** (0.75–2×) in the player menu, plus `<`/`>` keys.
+3. **(done) Playback speed** (0.75–2×) in the player menu, plus `<`/`>` keys.
    `video.playbackRate` works in every mode.
 4. **Picture-in-picture button** (`video.requestPictureInPicture()`),
    hidden where unsupported.
@@ -200,7 +223,7 @@ Ordered by value for effort.
 6. **"Mark previous episodes watched".** When you start E07 of a series
    with nothing watched, offer a one-click toast. The endpoint already
    exists (`/api/series/<id>/watched`). It needs an `up_to` id.
-7. **Remove from Continue watching.** Add an × on the card that calls
+7. **(done) Remove from Continue watching.** Add an × on the card that calls
    `/api/items/<id>/progress` with position 0.
 8. **Keyboard help** on `?`, and `0`–`9` to jump to 0–90 %.
 9. **Installable PWA.** Add a `manifest.webmanifest` and icons, so it

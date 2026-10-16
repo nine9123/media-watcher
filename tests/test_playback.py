@@ -135,3 +135,12 @@ def test_copy_mode_has_no_video_encoder():
     args = ffmpeg_args(cfg(), it, decide(it, Caps(), JA))
     assert args[args.index("-c:v") + 1] == "copy"
     assert "libx264" not in args
+
+
+def test_x264_threads_and_lookahead_are_capped():
+    it = item(streams=[v(codec="hevc"), a(1)])
+    args = ffmpeg_args(cfg(), it, decide(it, Caps(), JA))
+    assert args[args.index("-threads") + 1] == "4"
+    assert args[args.index("-rc-lookahead") + 1] == "10"
+    args = ffmpeg_args(cfg(transcode_threads=0), it, decide(it, Caps(), JA))
+    assert "-threads" not in args

@@ -276,3 +276,73 @@ def test_nested_show_folders_group_into_one_series(tmp_path):
     assert eps["Other.S02.1080p-GRP/Other.S02E01.1080p-GRP.mkv"] == (series["Other"], 2, 1)
     movies = [r["title"] for r in db.query("SELECT title FROM items WHERE kind='movie'")]
     assert movies == ["Lone Film"]
+
+
+def test_views_answer_304_until_the_database_changes(env):
+    lib = "/api/libraries/Shows"
+    r, raw = req(env, "GET", lib)
+    etag = r.getheader("ETag")
+    assert r.status == 200 and etag and r.getheader("Cache-Control") == "no-cache"
+    r, raw = req(env, "GET", lib, headers={"If-None-Match": etag})
+    assert r.status == 304 and raw == b""
+
+    sid = json.loads(raw or req(env, "GET", lib)[1])["series"][0]["id"]
+    eid = get_json(env, f"/api/series/{sid}")["episodes"][0]["id"]
+    req(env, "POST", f"/api/items/{eid}/progress", {"position": 300, "duration": 1440})
+    r, raw = req(env, "GET", lib, headers={"If-None-Match": etag})
+    assert r.status == 200 and r.getheader("ETag") != etag
+    assert json.loads(raw)["series"][0]["episodes"] == 5
+
+
+def test_home_etag_follows_scan_status(env):
+    r, _ = req(env, "GET", "/api/home")
+    etag = r.getheader("ETag")
+    assert req(env, "GET", "/api/home", headers={"If-None-Match": etag})[0].status == 304
+    env["scanner"].status["error"] = "library Shows is missing"
+    r, raw = req(env, "GET", "/api/home", headers={"If-None-Match": etag})
+    assert r.status == 200 and json.loads(raw)["status"]["error"] == "library Shows is missing"
+
+
+def test_playback_info_has_next_card_and_preferred_language(env):
+    sid = get_json(env, "/api/libraries/Shows")["series"][0]["id"]
+    e1, e2 = [e["id"] for e in get_json(env, f"/api/series/{sid}")["episodes"][:2]]
+    streams = [
+        {"index": 0, "type": "video", "codec": "h264", "pix_fmt": "yuv420p", "profile": "High"},
+        {"index": 1, "type": "audio", "codec": "aac", "language": "jpn", "title": "", "channels": 2},
+        {"index": 2, "type": "audio", "codec": "aac", "language": "eng", "title": "", "channels": 2},
+    ]
+    env["db"].write("UPDATE items SET probed=1, duration=1440, container='matroska,webm', "
+                    "streams=? WHERE id=?", (json.dumps(streams), e1))
+    info = get_json(env, f"/api/items/{e1}/playback")
+    assert info["audio_index"] == 1  # AUDIO_LANGUAGES default: Japanese
+    assert info["next"]["id"] == e2 and info["next"]["episode"] == 2
+    info = get_json(env, f"/api/items/{e1}/playback?alang=eng")
+    assert info["audio_index"] == 2 and "audio=2" in info["url"]
+
+
+def test_failed_thumbnail_is_not_retried_until_the_file_changes(env):
+    mid = get_json(env, "/api/libraries/Movies")["movies"][0]["id"]
+    marker = os.path.join(env["cfg"].cache_dir, "images", f"item-{mid}.none")
+    assert os.path.exists(marker)  # the scan tried once (no ffmpeg here) and gave up
+    assert req(env, "GET", f"/img/item/{mid}")[0].status == 404
+
+    calls = []
+    images = env["scanner"].images
+    images._frame = lambda *a: calls.append(a) or False
+    env["scanner"].scan()
+    assert calls == [] and os.path.exists(marker)
+
+    touch(env["movies"], "Heat (1995)/Heat (1995).mp4", b"new")
+    env["scanner"].scan()
+    assert len(calls) == 1 and os.path.exists(marker)
+
+
+def test_idle_keepalive_connection_is_closed(env, monkeypatch):
+    from mediawatcher.server import Handler
+    monkeypatch.setattr(Handler, "timeout", 0.3)
+    c = http.client.HTTPConnection("127.0.0.1", env["port"], timeout=10)
+    c.request("GET", "/healthz")
+    c.getresponse().read()
+    c.sock.settimeout(5)
+    assert c.sock.recv(1) == b""  # server hung up instead of waiting for the next request
+    c.close()

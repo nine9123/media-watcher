@@ -18,6 +18,7 @@ POSTER_NAMES = ("poster", "folder", "cover", "show", "default")
 IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".webp")
 POSTER_WIDTH = 360
 THUMB_WIDTH = 480
+LOCK_STRIPES = 64
 
 
 def find_image(listing: dict[str, str], stems: tuple[str, ...]) -> str | None:
@@ -37,21 +38,28 @@ class Images:
         self.dir = os.path.join(cfg.cache_dir, "images")
         os.makedirs(self.dir, exist_ok=True)
         self._sem = threading.Semaphore(cfg.thumb_workers)
-        self._locks: dict[str, threading.Lock] = {}
-        self._locks_guard = threading.Lock()
+        # A fixed set of striped locks: one per path would grow forever.
+        self._locks = [threading.Lock() for _ in range(LOCK_STRIPES)]
 
     def _lock(self, key: str) -> threading.Lock:
-        with self._locks_guard:
-            return self._locks.setdefault(key, threading.Lock())
+        return self._locks[hash(key) % LOCK_STRIPES]
 
     def cache_path(self, kind: str, id_: str) -> str:
         return os.path.join(self.dir, f"{kind}-{id_}.jpg")
 
+    def failed_path(self, kind: str, id_: str) -> str:
+        """Zero-byte marker: no image could be made from the current source."""
+        return os.path.join(self.dir, f"{kind}-{id_}.none")
+
+    def failed(self, kind: str, id_: str) -> bool:
+        return os.path.exists(self.failed_path(kind, id_))
+
     def remove(self, kind: str, id_: str) -> None:
-        try:
-            os.remove(self.cache_path(kind, id_))
-        except FileNotFoundError:
-            pass
+        for path in (self.cache_path(kind, id_), self.failed_path(kind, id_)):
+            try:
+                os.remove(path)
+            except FileNotFoundError:
+                pass
 
     def drop_stale(self, kind: str, id_: str, source: str | None) -> None:
         """Remove a cached image that is older than the sidecar it was made from.
@@ -60,7 +68,8 @@ class Images:
         calls this (and remove()) to keep them in step with the media.
         """
         out = self.cache_path(kind, id_)
-        if source and os.path.exists(out) and not self._fresh(out, source):
+        failed = self.failed_path(kind, id_)
+        if source and any(os.path.exists(p) and not self._fresh(p, source) for p in (out, failed)):
             self.remove(kind, id_)
 
     def _fresh(self, out: str, source: str) -> bool:
@@ -115,17 +124,23 @@ class Images:
         if row is None:
             return None
         out = self.cache_path("item", item_id)
+        failed = self.failed_path("item", item_id)
         source = row["image"] or row["path"]
         if self._fresh(out, source):
             return out
         with self._lock(out):
             if self._fresh(out, source):
                 return out
+            if self._fresh(failed, source):
+                return None  # tried before and failed; the scanner clears this on change
             if row["image"] and os.path.exists(row["image"]):
                 if self._resize(row["image"], out, THUMB_WIDTH):
                     return out
             if self._frame(row["path"], row["duration"], out):
                 return out
+            if os.path.exists(source):  # not for a share that is briefly unmounted
+                with open(failed, "wb"):
+                    pass
         return None
 
     def series_image(self, series_id: str) -> str | None:

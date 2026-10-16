@@ -6,22 +6,31 @@ and read the server's RSS from /proc/<pid>/status (VmRSS / VmHWM) before and
 after.
 
     python3 .claude-task/tools/loadtest.py "http://localhost:8097/api/home?api_key=KEY" 20 10
+
+An optional fourth argument is sent as If-None-Match, to measure the 304
+path of the JSON views (copy the ETag from a first response).
 """
 
 import sys
 import threading
 import time
+import urllib.error
 import urllib.request
 
 
 def main() -> None:
     url, conc, n = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
+    headers = {"If-None-Match": sys.argv[4]} if len(sys.argv) > 4 else {}
     lat: list[float] = []
 
     def worker() -> None:
         for _ in range(n):
             t = time.time()
-            urllib.request.urlopen(url).read()
+            try:
+                urllib.request.urlopen(urllib.request.Request(url, headers=headers)).read()
+            except urllib.error.HTTPError as e:
+                if e.code != 304:
+                    raise
             lat.append(time.time() - t)
 
     t0 = time.time()

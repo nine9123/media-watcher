@@ -224,7 +224,12 @@ def ffmpeg_args(cfg: Config, item: dict, d: Decision, start: float = 0.0) -> lis
                 "-vf", ",".join(filters),
                 "-c:v", "libx264", "-preset", cfg.x264_preset, "-crf", str(cfg.video_crf),
                 "-maxrate", "20M", "-bufsize", "40M", "-profile:v", "high",
+                # Every x264 frame thread and lookahead frame holds its own
+                # buffers; left alone they are the largest memory user here.
+                "-rc-lookahead", "10",
             ]
+            if cfg.transcode_threads:
+                args += ["-threads", str(cfg.transcode_threads)]
         # Short GOP so the stream starts quickly and fragments stay small.
         args += ["-g", "48", "-keyint_min", "48", "-sc_threshold", "0"]
 

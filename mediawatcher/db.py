@@ -99,6 +99,9 @@ class Database:
         self._opened = 0
         self._pool_lock = threading.Lock()
         self.write_lock = threading.Lock()
+        # Bumped after every committed write. The JSON views use it as their
+        # ETag, so a revisit with nothing changed costs no query at all.
+        self.generation = 0
         with self.conn() as c:
             c.executescript(LIBRARY_SCHEMA)
             c.executescript(STATE_SCHEMA)
@@ -109,7 +112,7 @@ class Database:
         c.execute("PRAGMA journal_mode=WAL")
         c.execute("PRAGMA synchronous=NORMAL")
         c.execute("PRAGMA temp_store=MEMORY")
-        c.execute("PRAGMA cache_size=-16000")
+        c.execute("PRAGMA cache_size=-4000")  # 4 MB per connection; the hot set is the indexes
         c.execute("ATTACH DATABASE ? AS st", (self.state_path,))
         c.execute("PRAGMA st.journal_mode=WAL")
         return c
@@ -156,6 +159,7 @@ class Database:
         with self.write_lock, self.conn() as c:
             c.execute(sql, args)
             c.commit()
+            self.generation += 1
 
     def write_many(self, statements) -> None:
         """Run [(sql, args), ...] in a single transaction."""
@@ -164,6 +168,7 @@ class Database:
                 for sql, args in statements:
                     c.execute(sql, args)
                 c.commit()
+                self.generation += 1
             except BaseException:
                 c.rollback()
                 raise
