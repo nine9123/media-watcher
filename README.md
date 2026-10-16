@@ -19,7 +19,13 @@ actors, no user management, no subtitles.
   pages are one small JSON request; posters/thumbnails are pre-generated and
   downscaled on the SSD so grids never pull full-size images over SMB.
 - **Watch progress.** Resume, continue watching, next up, auto-play next
-  episode, mark watched/unwatched per episode or season.
+  episode, mark watched/unwatched per episode or season. Library pages can
+  hide watched titles or show only those in progress, and long A–Z grids
+  get a letter bar.
+- **Skip intro / credits** from the file's own chapters: MKVs whose
+  chapters are named `Opening`/`OP`/`Intro` or `Ending`/`ED`/`Credits` get
+  a skip button while that chapter plays. When the credits run to the end
+  of the file the button goes straight to the next episode.
 - **Light on the NAS.** A remux or transcode paused for 3 minutes stops its
   ffmpeg process; pressing play restarts it at the same spot.
 - **Download button** on every file, plus a direct URL for VLC/mpv for when
@@ -123,6 +129,9 @@ Movies/Heat (1995)/Heat (1995).mkv
 - Auto-cleanup: files that disappear are dropped from the library on the
   next scan, along with their thumbnails. If a library folder is missing or
   completely empty (share not mounted, NAS asleep) nothing is deleted.
+- Files ffprobe cannot read and library folders that are missing are
+  listed on the Problems page (`#/problems`, linked from the home page and
+  the scan status), with a button to scan and retry them.
 
 ## How playback is decided
 
@@ -144,7 +153,7 @@ match), so jumping around a two-hour movie is instant, not a long buffer.
 
 `Space`/`K` play/pause · `←`/`→` 10 s · `J`/`L` 30 s · `↑`/`↓` volume ·
 `F` fullscreen · `M` mute · `N` next episode · `<`/`>` slower/faster ·
-`Esc` back
+`S` skip intro/credits · `Esc` back
 
 ## External players
 

@@ -19,9 +19,14 @@ proper "Up next" card.
 
 ## Progress
 
-Done on 2026-10-16: steps 1–3 of the suggested order, plus 1.4 and 1.5
-from step 5. Items marked **(done)** below. Still open: 2.3, 2.4, UX 4–6
-and 8–18.
+Done on 2026-10-16: steps 1–5 of the suggested order (step 4 and 2.4 in
+a second pass). Items marked **(done)** below. Still open: 2.3, UX 4–6,
+8–10, 12 and 15–18.
+
+The `skips` column (UX 11) is added to an existing `library.db` on
+start-up, and every file that was already probed is marked for probing
+again so it picks up its chapters. The first scan after upgrading
+therefore re-runs ffprobe over the whole library, once.
 
 Measured in the dev container (16 cores, so the x264 numbers are larger
 than on a 4-core NAS; the ratio is what matters):
@@ -34,6 +39,16 @@ than on a 4-core NAS; the ratio is what matters):
 | 2.1: `/api/series/<id>`, 10 clients | 1,115 req/s, p50 7.9 ms | 4,850 req/s, p50 1.9 ms (304) |
 | 2.1: `/api/home`, 10 clients | 970 req/s, p50 7.3 ms | 4,620 req/s, p50 2.1 ms (304) |
 | 1.5: ffprobe JSON per file | 2.2–6.3 KB | 1.2–3.9 KB, same `summarize()` output |
+| 2.4: `/api/home` without ETag, 40 series × 24 episodes, 30 active, 10 clients | 130 req/s, p50 63 ms | 271 req/s, p50 33 ms |
+| 2.4: same, 1 client | 484 req/s, p50 1.9 ms | 319 req/s, p50 2.9 ms |
+
+2.4 is a trade. SQLite does more work in the single query (it numbers
+every episode of all 30 active series, where the old loop stopped after 24
+results), so one client alone is about 1 ms slower. But the query turns 24
+rows into Python objects instead of 600–750, and SQLite releases the GIL
+while it runs. Under concurrency, which is what 2.4 was for, it is twice as
+fast. Revisits are 304s from 2.1 in either case. The new query returned the
+same next-up list as the old loop over 30 random watch states.
 
 1.1 was checked in headless Chromium against a 15-minute remuxed MKV.
 After a pause, the ffmpeg process went away once the timer fired. Play
@@ -175,7 +190,7 @@ which opens and reads the file again. Options, cheapest first:
 
 Measure time-to-first-frame after a seek on the real NAS before choosing.
 
-### 2.4 Next-up in one query (S)
+### 2.4 Next-up in one query (S) (done)
 
 `App.home()` runs `episode_order()` for each of up to 30 active series,
 then one more query per result. That is up to 60 queries, each paying
@@ -235,7 +250,7 @@ Ordered by value for effort.
 
 ### Medium (M each)
 
-11. **Skip intro / skip credits from chapters.** Many anime BD encodes
+11. **(done) Skip intro / skip credits from chapters.** Many anime BD encodes
     carry chapters named `Opening`/`OP`/`Intro` and `Ending`/`ED`/`Credits`.
     - Add `-show_chapters` to `probe.probe()` and store the matched
       chapter ranges in a new column.
@@ -246,13 +261,20 @@ Ordered by value for effort.
     There is no fingerprinting, no scraping and no extra CPU. A fallback
     "skip 85 s" button for files without chapters is cheap to add as
     well.
+
+    Done: the opening and ending chapters are stored as `items.skips`, and
+    `/api/items/<id>/playback` returns them. The player shows "Skip intro" /
+    "Skip credits" (key `S`). When the ED runs to within 10 s of the end,
+    the button says "Next episode", marks the episode watched and moves on.
+    Not done: the 85 s fallback button, and starting the Up next countdown
+    at the ED by itself.
 12. **Search as you type.** Debounce at 200 ms. Also match episode
     titles and filenames, not just series and movie titles.
-13. **"Problems" page.** List items with `probe_error` and libraries that
+13. **(done) "Problems" page.** List items with `probe_error` and libraries that
     were missing at last scan, with a retry button. The data is already
     in `items.probe_error` and `scanner.status["error"]`, but the UI only
     shows the last error string.
-14. **Library filters.** Add "hide watched" and "in progress" toggles, and
+14. **(done) Library filters.** Add "hide watched" and "in progress" toggles, and
     an A–Z jump bar for large grids. All of it is client-side;
     `draw()` already has the fields.
 15. **Night mode audio.** Apply `loudnorm` or `dynaudnorm` when audio is

@@ -16,7 +16,7 @@
     <input id="search" type="search" placeholder="Search" autocomplete="off">
   </form>
   <button id="scan-btn" class="ghost" title="Rescan libraries">⟳</button>
-  <span id="scan-status"></span>
+  <a id="scan-status"></a>
 </header>
 <main id="view"></main>
 
@@ -38,6 +38,7 @@
     <span id="p-mode" class="badge"></span>
   </div>
   <div id="p-error" hidden></div>
+  <button id="p-skip" hidden title="Skip (S)"></button>
   <div id="p-next-overlay" hidden>
     <div class="next-card">
       <div class="img"><img id="p-next-img" alt="" onerror="this.style.visibility='hidden'"></div>

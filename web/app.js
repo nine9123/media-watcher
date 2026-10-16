@@ -111,10 +111,13 @@ function viewHome() {
       html = `<p class="empty">${d.libraries.length ? "Nothing here yet. The first scan may still be running." :
         "No libraries configured. Mount media under /media or set LIBRARIES."}</p>`;
     }
-    view.innerHTML = html;
+    const notice = d.problems ? `<a class="notice" href="#/problems">⚠ ${d.problems} file${d.problems === 1 ? "" : "s"} could not be read</a>` : "";
+    view.innerHTML = notice + html;
     if (restore) restoreScroll();
   });
 }
+
+const JUMP_MIN = 40;  // items before a library grid gets the A–Z bar
 
 // The × on a Continue watching card forgets the position, so it drops off the row.
 view.addEventListener("click", async (e) => {
@@ -130,23 +133,32 @@ view.addEventListener("click", async (e) => {
 function viewLibrary(name) {
   const key = "/lib/" + name;
   cached(key, "/api/libraries/" + encodeURIComponent(name), (d, restore) => {
-    const state = JSON.parse(sessionStorage.getItem("lib:" + name) || '{"sort":"title","filter":""}');
+    const state = { sort: "title", filter: "", show: "all", ...JSON.parse(sessionStorage.getItem("lib:" + name) || "{}") };
     view.innerHTML = `<div class="toolbar"><h1>${esc(d.name)}</h1>
       <input id="lib-filter" type="search" placeholder="Filter" value="${esc(state.filter)}">
+      <select id="lib-show" title="Show">
+        <option value="all">All</option><option value="unwatched">Hide watched</option>
+        <option value="progress">In progress</option>
+      </select>
       <select id="lib-sort">
         <option value="title">A–Z</option><option value="added">Recently added</option>
         <option value="played">Recently watched</option><option value="unwatched">Unwatched first</option>
-      </select></div><div id="lib-grid" class="grid"></div>`;
+      </select></div><div id="lib-jump" class="jump" hidden></div><div id="lib-grid" class="grid"></div>`;
     $("#lib-sort").value = state.sort;
+    $("#lib-show").value = state.show;
     const draw = () => {
       const f = $("#lib-filter").value.trim().toLowerCase();
       const sort = $("#lib-sort").value;
-      sessionStorage.setItem("lib:" + name, JSON.stringify({ sort, filter: f }));
+      const show = $("#lib-show").value;
+      sessionStorage.setItem("lib:" + name, JSON.stringify({ sort, filter: f, show }));
       let all = [
-        ...d.series.map((s) => ({ ...s, _t: "s", _added: s.added_at, _played: s.played_at || 0, _left: s.episodes - s.watched })),
-        ...d.movies.map((m) => ({ ...m, _t: "m", _added: m.added_at, _played: 0, _left: m.watched ? 0 : 1 })),
+        ...d.series.map((s) => ({ ...s, _t: "s", _added: s.added_at, _played: s.played_at || 0, _left: s.episodes - s.watched,
+          _started: s.watched > 0 || !!s.played_at })),
+        ...d.movies.map((m) => ({ ...m, _t: "m", _added: m.added_at, _played: 0, _left: m.watched ? 0 : 1, _started: m.position > 0 })),
       ];
       if (f) all = all.filter((x) => x.title.toLowerCase().includes(f));
+      if (show === "unwatched") all = all.filter((x) => x._left > 0);
+      else if (show === "progress") all = all.filter((x) => x._left > 0 && x._started);
       const by = {
         title: () => 0,
         added: (a, b) => b._added - a._added,
@@ -155,11 +167,29 @@ function viewLibrary(name) {
       }[sort];
       if (sort === "title") all.sort((a, b) => (a.sort_name || a.title).localeCompare(b.sort_name || b.title));
       else all.sort(by);
-      $("#lib-grid").innerHTML = all.map((x) => (x._t === "s" ? seriesCard(x) : movieCard(x))).join("")
+      const grid = $("#lib-grid");
+      grid.innerHTML = all.map((x) => (x._t === "s" ? seriesCard(x) : movieCard(x))).join("")
         || `<p class="empty">Nothing found.</p>`;
+      // A–Z jump bar for long alphabetical grids: one button per first letter present.
+      const jump = $("#lib-jump");
+      const letters = [];
+      if (sort === "title" && all.length >= JUMP_MIN) {
+        all.forEach((x, i) => {
+          const c = (x.sort_name || x.title).charAt(0).toUpperCase();
+          const l = c >= "A" && c <= "Z" ? c : "#";
+          if (!letters.length || letters[letters.length - 1][0] !== l) letters.push([l, i]);
+        });
+      }
+      jump.hidden = letters.length < 2;
+      jump.innerHTML = letters.map(([l, i]) => `<button data-at="${i}">${l}</button>`).join("");
+      jump.onclick = (e) => {
+        const b = e.target.closest("[data-at]");
+        if (b) grid.children[Number(b.dataset.at)].scrollIntoView({ block: "start" });
+      };
     };
     $("#lib-filter").oninput = draw;
     $("#lib-sort").onchange = draw;
+    $("#lib-show").onchange = draw;
     draw();
     if (restore) restoreScroll();
   });
@@ -231,6 +261,27 @@ async function viewSearch(q) {
     (all.length ? `<div class="grid">${all.join("")}</div>` : `<p class="empty">Nothing found.</p>`);
 }
 
+function viewProblems() {
+  cached("/problems", "/api/problems", (d) => {
+    const files = d.files.map((f) => `<div><div class="file">${esc(f.library)} / ${esc(f.path)}</div>
+      <div class="why">${esc(f.error || "unknown error")}</div></div>`).join("");
+    const missing = d.missing.map((l) => `<div><div class="file">Library ${esc(l.name)}: ${esc(l.path)}</div>
+      <div class="why">Folder not found at the last scan. Nothing in it was removed.</div></div>`).join("");
+    view.innerHTML = `<div class="toolbar"><h1>Problems</h1>
+      <button id="retry" ${d.running ? "disabled" : ""}>${d.running ? "Scan running…" : "Retry now"}</button></div>
+      ${missing ? `<h2>Missing libraries</h2><div class="problems">${missing}</div>` : ""}
+      ${files ? `<h2>Files that could not be read (${d.files.length})</h2><div class="problems">${files}</div>` : ""}
+      ${!files && !missing ? `<p class="empty">${d.last_error ? "Last scan: " + esc(d.last_error) : "No problems."}</p>` : ""}`;
+    $("#retry").onclick = async () => {
+      $("#retry").disabled = true;
+      $("#retry").textContent = "Scan running…";
+      await api("/api/scan", { body: {} });
+      $("#scan-status").textContent = "Scanning…";
+      setTimeout(pollStatus, 800);
+    };
+  });
+}
+
 function restoreScroll() {
   const y = scrolls.get(currentRoute);
   if (y) requestAnimationFrame(() => window.scrollTo(0, y));
@@ -257,6 +308,7 @@ function route() {
   renderLibs();
   if ((r = m(/^\/lib\/(.+)$/))) viewLibrary(r[1]);
   else if ((r = m(/^\/series\/([0-9a-f]+)$/))) viewSeries(r[1]);
+  else if (m(/^\/problems$/)) viewProblems();
   else if (m(/^\/search$/)) viewSearch(new URLSearchParams(qs).get("q") || "");
   else viewHome();
 }
@@ -272,6 +324,8 @@ function showStatus(s) {
   } else {
     el.textContent = s.error ? "⚠ " + s.error : "";
   }
+  if (s.error && !s.running) el.href = "#/problems";
+  else el.removeAttribute("href");
   clearTimeout(statusTimer);
   statusTimer = setTimeout(pollStatus, s.running ? 3000 : 60000);
 }
@@ -390,6 +444,7 @@ const Player = {
     document.body.style.overflow = "hidden";
     $("#p-error").hidden = true;
     $("#p-next-overlay").hidden = true;
+    $("#p-skip").hidden = true;
     $("#p-title").textContent = "";
     $("#p-sub").textContent = "";
     this.load(null);
@@ -567,6 +622,34 @@ const Player = {
       buf = this.info && this.info.mode === "direct" ? end : this.offset + end;
     }
     $("#p-buffer").style.width = d ? `${Math.min(100, (buf / d) * 100)}%` : "0";
+    this.renderSkip();
+  },
+
+  // Intro/credits range (from the file's chapters) the play position is in.
+  currentSkip() {
+    if (!this.info || !this.info.skips || !$("#p-next-overlay").hidden) return null;
+    const t = this.time();
+    return this.info.skips.find((x) => t >= x.start && t < x.end - 1) || null;
+  },
+  // Credits that run to the end of the file: skipping them means the episode is done.
+  creditsAtEnd(s) {
+    const d = this.duration();
+    return s.kind === "credits" && d && s.end >= d - 10;
+  },
+  renderSkip() {
+    const s = this.currentSkip(), b = $("#p-skip");
+    b.hidden = !s;
+    if (s) b.textContent = s.kind === "intro" ? "Skip intro" : this.creditsAtEnd(s) && this.info.next_id ? "Next episode" : "Skip credits";
+  },
+  skip() {
+    const s = this.currentSkip();
+    if (!s) return;
+    $("#p-skip").hidden = true;
+    if (!this.creditsAtEnd(s)) { this.seek(s.end); return; }
+    this.info.done = true;  // every later report of this item says "watched"
+    this.report(true);
+    if (this.info.next_id) this.go(this.info.next_id);
+    else history.back();
   },
 
   seek(t) {
@@ -588,6 +671,7 @@ const Player = {
   report(ended = false) {
     if (!this.info || !this.id) return;
     const pos = this.time();
+    ended = ended || !!this.info.done;
     if (!ended && pos < 5) return;
     beacon(`/api/items/${this.info.item.id}/progress`, { position: pos, duration: this.duration(), ended });
   },
@@ -677,6 +761,7 @@ $("#p-prev").onclick = () => { Player.report(); Player.go(Player.info && Player.
 $("#p-fs").onclick = () => Player.toggleFullscreen();
 $("#p-volume").value = localStorage.getItem("volume") ?? 1;
 $("#p-volume").oninput = (e) => { video.muted = false; video.volume = Number(e.target.value); };
+$("#p-skip").onclick = () => Player.skip();
 $("#p-next-now").onclick = () => Player.go(Player.info.next_id);
 $("#p-next-cancel").onclick = () => { clearTimeout(Player.timers.next); $("#p-next-overlay").hidden = true; };
 $("#p-audio-btn").onclick = (e) => {
@@ -750,6 +835,7 @@ document.addEventListener("keydown", (e) => {
   else if (k === "ArrowDown") video.volume = Math.max(0, video.volume - 0.05);
   else if (k === "f") Player.toggleFullscreen();
   else if (k === "m") video.muted = !video.muted;
+  else if (k === "s" && !$("#p-skip").hidden) Player.skip();
   else if (k === "<" || k === ">") Player.stepRate(k === ">" ? 1 : -1);
   else if (k === "n" && Player.info && Player.info.next_id) { Player.report(); Player.go(Player.info.next_id); }
   else if (k === "Escape" && !document.fullscreenElement) $("#p-back").click();
