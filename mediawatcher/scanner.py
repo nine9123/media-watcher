@@ -113,8 +113,11 @@ class Scanner:
 
         existing = {
             r["id"]: r for r in self.db.query(
-                "SELECT id, size, mtime, added_at, probed FROM items WHERE library=?", (lib.name,))
+                "SELECT id, size, mtime, added_at, probed, image FROM items WHERE library=?",
+                (lib.name,))
         }
+        old_posters = {r["id"]: r["poster"] for r in self.db.query(
+            "SELECT id, poster FROM series WHERE library=?", (lib.name,))}
         dirs: dict[str, dict[str, str]] = {}
         files: list[tuple[str, str, list[str]]] = []
         for rel_dir, listing, videos in walk_library(root):
@@ -185,6 +188,7 @@ class Scanner:
         stmts = []
         now = time.time()
         series_ids = {}
+        posters = {}
         for key, s in series.items():
             sid = series_id(lib.name, key)
             series_ids[key] = sid
@@ -193,6 +197,7 @@ class Scanner:
                 listing = dirs.get(s["dir"], {})
                 img = find_image(listing, POSTER_NAMES)
                 poster = os.path.join(root, s["dir"], img) if img else None
+            posters[sid] = poster
             stmts.append((
                 "INSERT INTO series(id, library, title, year, dir, poster, sort_name, added_at) "
                 "VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET title=excluded.title, "
@@ -229,10 +234,25 @@ class Scanner:
         self.db.write_many(stmts)
         for iid in removed:
             self.images.remove("item", iid)
+        self._drop_stale_images(rows, existing, posters, old_posters)
         self._drop_empty_series()
         self.status["files"] += len(rows)
         if removed:
             log.info("library %s: removed %d missing files", lib.name, len(removed))
+
+    def _drop_stale_images(self, rows, existing, posters, old_posters) -> None:
+        """Cached images whose source changed since they were made."""
+        for row in rows:
+            old = existing.get(row["id"])
+            if old is not None and (row["changed"] or old["image"] != row["image"]):
+                self.images.remove("item", row["id"])
+            else:
+                self.images.drop_stale("item", row["id"], row["image"])
+        for sid, poster in posters.items():
+            if sid in old_posters and old_posters[sid] != poster:
+                self.images.remove("series", sid)
+            else:
+                self.images.drop_stale("series", sid, poster)
 
     def _drop_empty_series(self) -> None:
         gone = self.db.query(

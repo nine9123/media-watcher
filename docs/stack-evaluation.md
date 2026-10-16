@@ -150,3 +150,38 @@ These do not fix the GIL convoy. They make it hurt less:
   arena growth.
 - Serve thumbnails as static files by path without a DB lookup, so grid
   pages never touch SQLite per image.
+
+### Applied (2026-10-16)
+
+All three mitigations above are now in the Python version:
+
+- `db.py`: a fixed pool of at most 4 shared connections (fewer on small
+  CPUs) replaces one connection per request thread. There is also a new
+  `items(added_at)` index.
+- `server.py`: list views read only the columns `item_json()` uses (never
+  `streams`). "Recently added" is grouped in SQL, so it returns 24 rows
+  instead of 400. Next-up, prev/next and "mark season watched" read only
+  `(id, season, watched)` per episode.
+- `/img/...` serves an already cached image straight from disk with no
+  SQLite access. The scanner now deletes a cached image when its media
+  file or sidecar changes, or when the sidecar is replaced.
+- `Dockerfile`: `MALLOC_ARENA_MAX=2`.
+
+These were measured with the same synthetic library (100 × 24 episodes + 1
+movie, 30 series with progress), pinned to 3 CPUs with `taskset -c 0-2` on
+a 16-core arm64 host, Python 3.11.2, 20 requests per client:
+
+| | before | after |
+|---|---|---|
+| RSS idle after the first scan | 39 MB | 31 MB |
+| RSS after the run below | 326 MB (peak 330) | 41 MB (35 MB with `MALLOC_ARENA_MAX=2`) |
+| `/api/home`, 1 client | 4.8 ms p50, 200 req/s | 3.5 ms p50, 281 req/s |
+| `/api/home`, 8 clients | 73 ms p50, 113 req/s | 23 ms p50, 318 req/s |
+| `/api/home`, 20 clients | 449 ms p50, 44 req/s | 46 ms p50, 317 req/s |
+| `/api/libraries/Shows`, 20 clients | 53 ms p50, 377 req/s | 23 ms p50, 674 req/s |
+| `/img/item/…` (cached), 20 clients | 10 ms p50, 1,876 req/s | 7.5 ms p50, 2,610 req/s |
+
+The GIL convoy is still there, but requests now produce far fewer rows to
+be slow on, and memory stays flat. The Go recommendation stands if
+the library or the number of clients grows a lot. For one user, the Python
+version no longer has a problem you would notice.

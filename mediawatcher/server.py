@@ -68,11 +68,22 @@ class App:
         return bool(tok) and hmac.compare_digest(tok.encode(), self.session_token.encode())
 
     # ---- item helpers ----------------------------------------------------
-    ITEM_SQL = (
-        "SELECT i.*, s.title AS series_title, p.position AS position, p.watched AS watched, "
+    # Every row costs a GIL round trip in sqlite3, so list views read only the
+    # columns item_json() needs (never the large `streams` blob) and as few
+    # rows as possible. ITEM_SQL is for single items that are about to play.
+    _JOINS = (
+        ", s.title AS series_title, p.position AS position, p.watched AS watched, "
         "p.updated_at AS progress_at FROM items i LEFT JOIN series s ON s.id=i.series_id "
         "LEFT JOIN st.progress p ON p.id=i.id"
     )
+    ITEM_SQL = "SELECT i.*" + _JOINS
+    LIST_SQL = (
+        "SELECT i.id, i.kind, i.title, i.year, i.series_id, i.season, i.episode, "
+        "i.episode_end, i.duration, i.video_codec, i.height, i.library, i.path, i.size, "
+        "i.added_at, i.probe_error" + _JOINS
+    )
+    EPISODE_ORDER = ("ORDER BY i.season=0, i.season, i.episode IS NULL, i.episode, "
+                     "i.sort_name")
 
     @staticmethod
     def item_json(r) -> dict:
@@ -105,13 +116,19 @@ class App:
 
     def episodes(self, sid: str):
         return self.db.query(
-            self.ITEM_SQL + " WHERE i.series_id=? ORDER BY i.season=0, i.season, "
-            "i.episode IS NULL, i.episode, i.sort_name", (sid,))
+            self.LIST_SQL + " WHERE i.series_id=? " + self.EPISODE_ORDER, (sid,))
+
+    def episode_order(self, sid: str):
+        """Just (id, season, watched) of a series' episodes, in play order."""
+        return self.db.query(
+            "SELECT i.id, i.season, COALESCE(p.watched,0) AS watched FROM items i "
+            "LEFT JOIN st.progress p ON p.id=i.id WHERE i.series_id=? " + self.EPISODE_ORDER,
+            (sid,))
 
     def neighbours(self, r) -> tuple[str | None, str | None]:
         if not r["series_id"]:
             return None, None
-        ids = [e["id"] for e in self.episodes(r["series_id"])]
+        ids = [e["id"] for e in self.episode_order(r["series_id"])]
         i = ids.index(r["id"])
         return (ids[i - 1] if i > 0 else None, ids[i + 1] if i + 1 < len(ids) else None)
 
@@ -155,7 +172,7 @@ class App:
     # ---- views -----------------------------------------------------------
     def home(self) -> dict:
         cont = self.db.query(
-            self.ITEM_SQL + " WHERE p.watched=0 AND p.position>=? ORDER BY p.updated_at DESC "
+            self.LIST_SQL + " WHERE p.watched=0 AND p.position>=? ORDER BY p.updated_at DESC "
             "LIMIT 24", (RESUME_MIN,))
         cont_ids = {r["id"] for r in cont}
         cont_series = {r["series_id"] for r in cont if r["series_id"]}
@@ -169,31 +186,35 @@ class App:
         for a in active:
             if a["sid"] in cont_series:
                 continue
-            eps = [e for e in self.episodes(a["sid"]) if e["season"] != 0]
+            eps = [e for e in self.episode_order(a["sid"]) if e["season"] != 0]
             last = max((n for n, e in enumerate(eps) if e["watched"]), default=None)
             if last is None:
                 continue
             nxt = next((e for e in eps[last + 1:] if not e["watched"]), None)
             if nxt is not None and nxt["id"] not in cont_ids:
-                next_up.append(self.item_json(nxt))
+                next_up.append(self.item_json(
+                    self.db.one(self.LIST_SQL + " WHERE i.id=?", (nxt["id"],))))
             if len(next_up) >= 24:
                 break
 
-        recent_rows = self.db.query(
-            self.ITEM_SQL + " ORDER BY i.added_at DESC LIMIT 400")
-        recent, seen = [], set()
-        for r in recent_rows:
-            key = r["series_id"] or r["id"]
-            if key in seen:
-                continue
-            seen.add(key)
-            if r["series_id"]:
-                recent.append({"type": "series", "id": r["series_id"],
-                               "title": r["series_title"], "added_at": r["added_at"]})
-            else:
-                recent.append({"type": "movie", **self.item_json(r)})
-            if len(recent) >= 24:
-                break
+        # Recently added: newest series (by their newest episode) and movies,
+        # grouped in SQL so only the 24 rows shown come back to Python.
+        groups = self.db.query(
+            "SELECT g.series_id, g.id, g.added_at, s.title FROM ("
+            "SELECT series_id, id, MAX(added_at) AS added_at FROM items "
+            "GROUP BY COALESCE(series_id, id)) g LEFT JOIN series s ON s.id=g.series_id "
+            "ORDER BY g.added_at DESC LIMIT 24")
+        movie_ids = [g["id"] for g in groups if not g["series_id"]]
+        movies = {r["id"]: r for r in self.db.query(
+            self.LIST_SQL + f" WHERE i.id IN ({','.join('?' * len(movie_ids))})",
+            movie_ids)} if movie_ids else {}
+        recent = []
+        for g in groups:
+            if g["series_id"]:
+                recent.append({"type": "series", "id": g["series_id"],
+                               "title": g["title"], "added_at": g["added_at"]})
+            elif g["id"] in movies:
+                recent.append({"type": "movie", **self.item_json(movies[g["id"]])})
         return {
             "continue": [self.item_json(r) for r in cont],
             "next_up": next_up,
@@ -222,7 +243,7 @@ class App:
             "LEFT JOIN st.progress p ON p.id=i.id WHERE s.library=? GROUP BY s.id "
             "ORDER BY s.sort_name", (name,))
         movies = self.db.query(
-            self.ITEM_SQL + " WHERE i.library=? AND i.kind='movie' ORDER BY i.sort_name", (name,))
+            self.LIST_SQL + " WHERE i.library=? AND i.kind='movie' ORDER BY i.sort_name", (name,))
         return {
             "name": name,
             "series": [dict(r) for r in series],
@@ -256,7 +277,7 @@ class App:
             "SELECT id, title, year, library FROM series WHERE title LIKE ? ESCAPE '\\' "
             "ORDER BY sort_name LIMIT 50", (like,))
         movies = self.db.query(
-            self.ITEM_SQL + " WHERE i.kind='movie' AND (i.title LIKE ? ESCAPE '\\' "
+            self.LIST_SQL + " WHERE i.kind='movie' AND (i.title LIKE ? ESCAPE '\\' "
             "OR i.rel_path LIKE ? ESCAPE '\\') ORDER BY i.sort_name LIMIT 50", (like, like))
         return {"series": [dict(r) for r in series], "movies": [self.item_json(r) for r in movies]}
 
@@ -526,7 +547,7 @@ class Handler(BaseHTTPRequestHandler):
     @route("POST", r"/api/series/([0-9a-f]+)/watched")
     def api_series_watched(self, sid):
         b = self.body_json()
-        ids = [e["id"] for e in self.app.episodes(sid)
+        ids = [e["id"] for e in self.app.episode_order(sid)
                if b.get("season") is None or e["season"] == b.get("season")]
         self.app.set_watched(ids, bool(b.get("watched", True)))
         self.send_json({"ok": True})
@@ -534,6 +555,14 @@ class Handler(BaseHTTPRequestHandler):
     # ---- images ----------------------------------------------------------
     @route("GET", r"/img/(item|series)/([0-9a-f]+)")
     def image(self, kind, id_):
+        # Grid pages fire dozens of these at once: serve a cached image straight
+        # from disk, without touching SQLite. The scanner drops stale ones.
+        try:
+            self.send_static_file(self.app.images.cache_path(kind, id_), "image/jpeg",
+                                  "private, max-age=86400")
+            return
+        except HttpError:
+            pass  # not cached yet: look it up and generate it
         path = self.app.images.item_image(id_) if kind == "item" else self.app.images.series_image(id_)
         if not path:
             self.send_response(404)

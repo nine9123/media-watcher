@@ -193,3 +193,58 @@ def test_search(env):
     assert [m["title"] for m in d["movies"]] == ["Heat"]
     d = get_json(env, "/api/search?q=sho")
     assert [s["title"] for s in d["series"]] == ["Show"]
+
+
+def test_home_recent_groups_series(env):
+    home = get_json(env, "/api/home")
+    assert sorted((r["type"], r["title"]) for r in home["recent"]) == [
+        ("movie", "Heat"), ("series", "Show")]
+    movie = next(r for r in home["recent"] if r["type"] == "movie")
+    assert movie["file"] == "Heat (1995).mp4" and movie["watched"] is False
+
+
+def test_db_pool_is_bounded(env):
+    db = env["db"]
+    errors = []
+
+    def work():
+        try:
+            for _ in range(20):
+                assert db.one("SELECT COUNT(*) AS n FROM items")["n"] == 6
+        except Exception as e:  # noqa: BLE001
+            errors.append(e)
+
+    threads = [threading.Thread(target=work) for _ in range(12)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert errors == []
+    assert db._opened <= db._pool_size
+
+
+def test_cached_image_served_and_dropped_when_media_changes(env):
+    mid = get_json(env, "/api/libraries/Movies")["movies"][0]["id"]
+    img_dir = os.path.join(env["cfg"].cache_dir, "images")
+    cached = os.path.join(img_dir, f"item-{mid}.jpg")
+    assert req(env, "GET", f"/img/item/{mid}")[0].status == 404  # no ffmpeg, nothing cached
+    with open(cached, "wb") as f:
+        f.write(b"\xff\xd8jpeg")
+    r, raw = req(env, "GET", f"/img/item/{mid}")
+    assert r.status == 200 and raw == b"\xff\xd8jpeg"
+
+    env["scanner"].scan()  # unchanged file: cache kept
+    assert os.path.exists(cached)
+    touch(env["movies"], "Heat (1995)/Heat (1995).mp4", b"new")
+    env["scanner"].scan()
+    assert not os.path.exists(cached)
+
+
+def test_new_sidecar_poster_replaces_cached_series_image(env):
+    sid = get_json(env, "/api/libraries/Shows")["series"][0]["id"]
+    cached = os.path.join(env["cfg"].cache_dir, "images", f"series-{sid}.jpg")
+    with open(cached, "wb") as f:
+        f.write(b"old")
+    touch(env["shows"], "Show (2020)/poster.jpg", b"poster")
+    env["scanner"].scan()
+    assert not os.path.exists(cached)

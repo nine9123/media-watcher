@@ -11,8 +11,10 @@ progress survives a cache wipe and a change of mount point.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import os
+import queue
 import sqlite3
 import threading
 
@@ -48,6 +50,7 @@ CREATE TABLE IF NOT EXISTS items (
 CREATE INDEX IF NOT EXISTS items_series ON items(series_id, season, episode);
 CREATE INDEX IF NOT EXISTS items_library ON items(library, kind);
 CREATE INDEX IF NOT EXISTS items_probed ON items(probed);
+CREATE INDEX IF NOT EXISTS items_added ON items(added_at);
 CREATE TABLE IF NOT EXISTS series (
     id TEXT PRIMARY KEY,
     library TEXT NOT NULL,
@@ -79,48 +82,84 @@ def series_id(library: str, key: str) -> str:
     return hashlib.sha1(f"series\0{library}\0{key}".encode()).hexdigest()[:16]
 
 
+# A few shared connections instead of one per request thread. More readers
+# than cores only adds GIL contention on row fetches, and every connection
+# that is opened (with its page cache) is memory that is never handed back.
+POOL_SIZE = max(2, min(4, os.cpu_count() or 1))
+
+
 class Database:
-    def __init__(self, cache_dir: str, config_dir: str):
+    def __init__(self, cache_dir: str, config_dir: str, pool_size: int = POOL_SIZE):
         os.makedirs(cache_dir, exist_ok=True)
         os.makedirs(config_dir, exist_ok=True)
         self.library_path = os.path.join(cache_dir, "library.db")
         self.state_path = os.path.join(config_dir, "state.db")
-        self._local = threading.local()
+        self._pool: queue.LifoQueue[sqlite3.Connection] = queue.LifoQueue()
+        self._pool_size = max(1, pool_size)
+        self._opened = 0
+        self._pool_lock = threading.Lock()
         self.write_lock = threading.Lock()
-        c = self.conn()
-        c.executescript(LIBRARY_SCHEMA)
-        c.executescript(STATE_SCHEMA)
+        with self.conn() as c:
+            c.executescript(LIBRARY_SCHEMA)
+            c.executescript(STATE_SCHEMA)
 
-    def conn(self) -> sqlite3.Connection:
-        c = getattr(self._local, "conn", None)
-        if c is None:
-            c = sqlite3.connect(self.library_path, timeout=30, check_same_thread=False)
-            c.row_factory = sqlite3.Row
-            c.execute("PRAGMA journal_mode=WAL")
-            c.execute("PRAGMA synchronous=NORMAL")
-            c.execute("PRAGMA temp_store=MEMORY")
-            c.execute("PRAGMA cache_size=-16000")
-            c.execute("ATTACH DATABASE ? AS st", (self.state_path,))
-            c.execute("PRAGMA st.journal_mode=WAL")
-            self._local.conn = c
+    def _open(self) -> sqlite3.Connection:
+        c = sqlite3.connect(self.library_path, timeout=30, check_same_thread=False)
+        c.row_factory = sqlite3.Row
+        c.execute("PRAGMA journal_mode=WAL")
+        c.execute("PRAGMA synchronous=NORMAL")
+        c.execute("PRAGMA temp_store=MEMORY")
+        c.execute("PRAGMA cache_size=-16000")
+        c.execute("ATTACH DATABASE ? AS st", (self.state_path,))
+        c.execute("PRAGMA st.journal_mode=WAL")
         return c
 
+    @contextlib.contextmanager
+    def conn(self):
+        """Borrow a pooled connection; waits when all of them are in use."""
+        try:
+            c = self._pool.get_nowait()
+        except queue.Empty:
+            with self._pool_lock:
+                grow = self._opened < self._pool_size
+                if grow:
+                    self._opened += 1
+            if grow:
+                try:
+                    c = self._open()
+                except BaseException:
+                    with self._pool_lock:
+                        self._opened -= 1
+                    raise
+            else:
+                c = self._pool.get()
+        try:
+            yield c
+        finally:
+            if c.in_transaction:
+                c.rollback()
+            self._pool.put(c)
+
     def query(self, sql: str, args=()) -> list[sqlite3.Row]:
-        return self.conn().execute(sql, args).fetchall()
+        with self.conn() as c:
+            return c.execute(sql, args).fetchall()
 
     def one(self, sql: str, args=()) -> sqlite3.Row | None:
-        return self.conn().execute(sql, args).fetchone()
+        with self.conn() as c:
+            cur = c.execute(sql, args)
+            try:
+                return cur.fetchone()
+            finally:
+                cur.close()  # don't hand the connection on with a half-read statement
 
     def write(self, sql: str, args=()) -> None:
-        with self.write_lock:
-            c = self.conn()
+        with self.write_lock, self.conn() as c:
             c.execute(sql, args)
             c.commit()
 
     def write_many(self, statements) -> None:
         """Run [(sql, args), ...] in a single transaction."""
-        with self.write_lock:
-            c = self.conn()
+        with self.write_lock, self.conn() as c:
             try:
                 for sql, args in statements:
                     c.execute(sql, args)

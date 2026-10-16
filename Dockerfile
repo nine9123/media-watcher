@@ -13,8 +13,11 @@ WORKDIR /app
 COPY mediawatcher ./mediawatcher
 COPY web ./web
 
+# MALLOC_ARENA_MAX: glibc otherwise keeps a malloc arena per request thread
+# it has ever seen, and RSS only grows.
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
+    MALLOC_ARENA_MAX=2 \
     MEDIA_ROOT=/media \
     CACHE_DIR=/cache \
     CONFIG_DIR=/config \

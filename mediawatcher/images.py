@@ -53,6 +53,16 @@ class Images:
         except FileNotFoundError:
             pass
 
+    def drop_stale(self, kind: str, id_: str, source: str | None) -> None:
+        """Remove a cached image that is older than the sidecar it was made from.
+
+        Cached images are served without a database lookup, so the scanner
+        calls this (and remove()) to keep them in step with the media.
+        """
+        out = self.cache_path(kind, id_)
+        if source and os.path.exists(out) and not self._fresh(out, source):
+            self.remove(kind, id_)
+
     def _fresh(self, out: str, source: str) -> bool:
         try:
             return os.stat(out).st_mtime >= os.stat(source).st_mtime
