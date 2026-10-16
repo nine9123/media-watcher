@@ -160,3 +160,22 @@ def test_extras_and_ignored():
 
 def test_title_key_merges_variants():
     assert title_key("Steins;Gate") == title_key("Steins Gate") == "steinsgate"
+
+
+def test_nested_folders_belong_to_top_level_series():
+    r = ep("Show (2020)/Show S02/Show - S02E03.mkv")
+    assert (r.series_title, r.series_year, r.series_dir, r.season) == ("Show", 2020, "Show (2020)", 2)
+    r = ep("Show/Season 2/Disc 1/Show - 04.mkv")
+    assert (r.series_dir, r.season, r.episode) == ("Show", 2, 4)
+    r = ep("Show/Arc Two/Show - 13.mkv")
+    assert (r.series_title, r.series_dir, r.season, r.episode) == ("Show", "Show", 1, 13)
+
+
+def test_episode_from_release_folder_when_file_is_obfuscated():
+    r = ep("Show/Show.S01E02.1080p.WEB-DL-GRP/abc123.mkv")
+    assert (r.series_dir, r.season, r.episode, r.title) == ("Show", 1, 2, "")
+
+
+def test_library_that_is_one_show():
+    r = ep("Season 2/Show - S02E01.mkv")
+    assert (r.series_title, r.series_dir, r.season) == ("Show", "", 2)

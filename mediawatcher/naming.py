@@ -228,28 +228,42 @@ def parse_path(rel_path: str, library_type: str = "auto", siblings: int = 1) -> 
 
 
 def _series_from_dirs(dirs: list[str]):
-    """Work out (series_title, series_year, series_dir, season) from the folder chain."""
+    """Work out (series_title, series_year, series_dir, season) from the folder chain.
+
+    The series is the top-level folder inside the library, however deep the
+    file sits below it ("Show/Show S02/Disc 1/x.mkv" belongs to "Show"), so
+    every episode under one show folder lands in one series. The season comes
+    from the deepest folder that names one ("Season 2", "Show.S02.1080p").
+    """
     if not dirs:
         return None, None, "", None
-    season = season_from_dir(dirs[-1])
-    if season is not None:
-        series_dirs = dirs[:-1]
-    else:
-        series_dirs = dirs
-    if not series_dirs:
+    season = None
+    for d in reversed(dirs):
+        season = season_from_dir(d)
+        if season is None:
+            season = split_season_in_name(d)[1]
+        if season is not None:
+            break
+    if season_from_dir(dirs[0]) is not None:
+        # The library itself is one show ("Season 1/x.mkv"): no series folder.
         return None, None, "", season
-    name = series_dirs[-1]
-    stripped, season_in_name = split_season_in_name(name)
-    if season is None and season_in_name is not None:
-        season = season_in_name
+    name = dirs[0]
+    stripped, _ = split_season_in_name(name)
     title, year = clean_title(stripped)
     if not title:
         title, year = clean_title(name)
-    return title, year, "/".join(series_dirs), season
+    return title, year, name, season
 
 
 def _parse_episode(stem: str, dirs: list[str], library_type: str, siblings: int):
     found = _match_episode(stem)
+    if found is None and len(dirs) >= 2:
+        # Per-episode release folder with an obfuscated file inside:
+        # "Show/Show.S01E02.1080p-GRP/abc123.mkv".
+        m = _SXXEYY.search(dirs[-1])
+        if m:
+            end = int(m.group(3)) if m.group(3) else None
+            found = ("", int(m.group(1)), int(m.group(2)), end, "")
     in_season_dir = bool(dirs) and season_from_dir(dirs[-1]) is not None
 
     if found is None:

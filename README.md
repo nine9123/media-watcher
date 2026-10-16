@@ -99,8 +99,15 @@ Anime/[SubsPlease] Loose Show - 12 (1080p).mkv   (joins "Loose Show" folder if o
 Movies/Heat (1995)/Heat (1995).mkv
 ```
 
-- Series = the folder above `Season NN` / `Specials` (or the file's folder);
-  release tags (`1080p`, `x265`, `[Group]`, …) are stripped from names.
+- Series = the top-level folder inside the library, however deep the
+  episodes sit below it (`Show/Show S02/Disc 1/…`, `Show/Arc 2/…` all belong
+  to `Show`); the season comes from the nearest `Season NN` / `Specials` /
+  `…S02…` folder. Release tags (`1080p`, `x265`, `[Group]`, …) are stripped
+  from names.
+- Once a show folder has recognised episodes, every other video under it
+  joins that show too (unnumbered ones like `Pilot.mkv` included), and
+  top-level folders with the same show name (`Show.S01.1080p-GRP`,
+  `Show.S02.1080p-GRP`) merge into one series.
 - `SxxEyy`, `SxxEyy-Ezz`, `1x02`, `Episode 5`, `Show - 05`/`05v2` are
   recognised. Years are never taken for episode numbers.
 - Posters: `poster.jpg`/`folder.jpg`/`cover.jpg` in the series or movie

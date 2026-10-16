@@ -101,11 +101,11 @@ function renderLibs() {
 function viewHome() {
   cached("/", "/api/home", (d, restore) => {
     libraries = d.libraries; renderLibs(); showStatus(d.status);
-    const row = (title, items, fn, cls = "") => items.length
-      ? `<h2>${title}</h2><div class="row-scroll ${cls}">${items.map(fn).join("")}</div>` : "";
+    const row = (title, items, fn, cls = "row-scroll") => items.length
+      ? `<h2>${title}</h2><div class="${cls}">${items.map(fn).join("")}</div>` : "";
     const recent = (r) => r.type === "series" ? seriesCard(r) : movieCard(r);
     let html = row("Continue watching", d.continue, itemCard) + row("Next up", d.next_up, itemCard)
-      + row("Recently added", d.recent, recent, "posters");
+      + row("Recently added", d.recent, recent, "grid");
     if (!html) {
       html = `<p class="empty">${d.libraries.length ? "Nothing here yet. The first scan may still be running." :
         "No libraries configured. Mount media under /media or set LIBRARIES."}</p>`;

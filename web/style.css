@@ -26,6 +26,7 @@ nav#libs { display: flex; gap: .3rem; overflow-x: auto; flex: 1; }
 nav#libs a { padding: .3em .8em; border-radius: 999px; color: var(--dim); white-space: nowrap; }
 nav#libs a.active, nav#libs a:hover { color: var(--fg); background: var(--bg3); }
 #search { width: 14rem; }
+#scan-btn { font-size: 1.5rem; line-height: 1; padding: .2em .45em; }
 #scan-status { color: var(--dim); font-size: .85em; white-space: nowrap; }
 
 main#view { padding: 1rem 1.2rem 3rem; max-width: 1800px; margin: 0 auto; }
@@ -34,7 +35,6 @@ h2 { font-size: 1.15rem; margin: 1.4rem 0 .6rem; }
 
 .row-scroll { display: grid; grid-auto-flow: column; grid-auto-columns: 15rem; gap: .9rem;
   overflow-x: auto; padding-bottom: .6rem; scroll-snap-type: x proximity; }
-.row-scroll.posters { grid-auto-columns: 9.5rem; }
 .row-scroll > * { scroll-snap-align: start; }
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(9.5rem, 1fr)); gap: 1.1rem .9rem; }
 
