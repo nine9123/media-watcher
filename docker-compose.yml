@@ -17,6 +17,8 @@ services:
       AUDIO_CHANNELS: "2"
       HWACCEL: "none"   # "vaapi" together with the devices/group_add below
       SCAN_INTERVAL: "1800"
+      # Optional: posters and descriptions from TMDB. Put TMDB_API_KEY in .env.
+      TMDB_API_KEY: ${TMDB_API_KEY:-}
     volumes:
       - /path/to/media:/media:ro                 # your library, read-only
       - /path/to/ssd/media-watcher/cache:/cache  # disposable: db + thumbnails

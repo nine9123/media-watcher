@@ -51,6 +51,8 @@ function pct(it) {
   return it.duration && it.position ? Math.min(100, (it.position / it.duration) * 100) : 0;
 }
 const img = (src) => `<img loading="lazy" decoding="async" src="${src}" alt="" onerror="this.remove()">`;
+// art_v changes when a poster is downloaded, so the browser's cached image is skipped.
+const art = (kind, x) => `/img/${kind}/${x.id}${x.art_v ? "?v=" + x.art_v : ""}`;
 const bar = (p) => (p > 0 ? `<div class="bar"><i style="width:${p.toFixed(1)}%"></i></div>` : "");
 
 function seriesCard(s) {
@@ -58,20 +60,20 @@ function seriesCard(s) {
   const badge = s.episodes == null ? "" : unwatched > 0
     ? `<span class="badge">${unwatched}</span>` : `<span class="badge done">✓</span>`;
   const sub = [s.year, s.episodes != null ? `${s.episodes} ep` : ""].filter(Boolean).join(" · ");
-  return `<a class="card" href="#/series/${s.id}"><div class="img">${badge}${esc(s.title)}${img("/img/series/" + s.id)}</div>
+  return `<a class="card" href="#/series/${s.id}"><div class="img">${badge}${esc(s.title)}${img(art("series", s))}</div>
     <div class="t" title="${esc(s.title)}">${esc(s.title)}</div><div class="s">${esc(sub)}</div></a>`;
 }
 function movieCard(m) {
   const badge = m.watched ? `<span class="badge done">✓</span>` : "";
   const sub = [m.year, fmtDur(m.duration)].filter(Boolean).join(" · ");
-  return `<a class="card" href="#/play/${m.id}"><div class="img">${badge}${esc(m.title)}${img("/img/item/" + m.id)}${bar(pct(m))}</div>
+  return `<a class="card" href="#/play/${m.id}"><div class="img">${badge}${esc(m.title)}${img(art("item", m))}${bar(pct(m))}</div>
     <div class="t" title="${esc(m.title)}">${esc(m.title)}</div><div class="s">${esc(sub)}</div></a>`;
 }
 function itemCard(it, removable = false) {
   const title = it.series_title || it.title;
   const sub = it.series_title ? [epLabel(it), it.title].filter(Boolean).join(" · ") : fmtDur(it.duration);
   const x = removable ? `<button class="unresume" data-unresume="${it.id}" title="Remove from Continue watching">×</button>` : "";
-  return `<a class="card wide" href="#/play/${it.id}"><div class="img">${x}${esc(title)}${img("/img/item/" + it.id)}${bar(pct(it))}</div>
+  return `<a class="card wide" href="#/play/${it.id}"><div class="img">${x}${esc(title)}${img(art("item", it))}${bar(pct(it))}</div>
     <div class="t" title="${esc(title)}">${esc(title)}</div><div class="s" title="${esc(sub)}">${esc(sub)}</div></a>`;
 }
 
@@ -204,9 +206,10 @@ function viewSeries(id) {
     if (!seasons.includes(season)) season = seasons[0];
     const playLabel = next ? (next.position > 0 ? `▶ Resume ${epLabel(next)}` : `▶ Play ${epLabel(next) || next.title}`) : "";
     const watched = d.episodes.filter((e) => e.watched).length;
-    view.innerHTML = `<div class="series-head">${`<img class="poster" src="/img/series/${id}" alt="" onerror="this.style.visibility='hidden'">`}
+    view.innerHTML = `<div class="series-head">${`<img class="poster" src="${art("series", d)}" alt="" onerror="this.style.visibility='hidden'">`}
       <div><h1>${esc(d.title)}</h1>
       <div class="meta">${[d.year, `${d.episodes.length} episodes`, `${watched} watched`].filter(Boolean).join(" · ")}</div>
+      ${d.overview ? `<p class="overview">${esc(d.overview)}</p>` : ""}
       <div class="actions">${next ? `<a class="btn" href="#/play/${next.id}">${esc(playLabel)}</a>` : ""}
         <button class="secondary" id="mark-season">Mark season watched</button>
         <button class="secondary" id="unmark-season">Mark season unwatched</button></div></div></div>
@@ -320,6 +323,7 @@ function showStatus(s) {
   const el = $("#scan-status");
   if (s.running) {
     el.textContent = s.phase === "probing" ? `Scanning ${s.probed}/${s.to_probe}` :
+      s.phase === "metadata" ? `Fetching metadata ${s.fetched}/${s.to_fetch}` :
       s.phase === "thumbnails" ? "Making thumbnails" : `Scanning ${s.files} files`;
   } else {
     el.textContent = s.error ? "⚠ " + s.error : "";

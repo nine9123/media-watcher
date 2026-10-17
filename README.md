@@ -1,8 +1,9 @@
 # Media Watcher
 
 A small, fast, single-user media server for a NAS. It does one thing: browse
-your library and play it in the browser, reliably. No metadata scraping, no
-actors, no user management, no subtitles.
+your library and play it in the browser, reliably. No actors, no user
+management, no subtitles; posters and descriptions from TMDB are optional
+(off unless you give it a key).
 
 - **Plays everything.** Each file is played the cheapest way that works:
   direct (byte ranges, zero CPU), remux (video copied, audio converted if
@@ -28,6 +29,9 @@ actors, no user management, no subtitles.
   of the file the button goes straight to the next episode.
 - **Light on the NAS.** A remux or transcode paused for 3 minutes stops its
   ffmpeg process; pressing play restarts it at the same spot.
+- **Posters from TMDB (optional).** With `TMDB_API_KEY` set, each scan
+  looks up new series and movies on [TMDB](https://www.themoviedb.org/)
+  and stores a poster and a description. See [Metadata](#metadata).
 - **Download button** on every file, plus a direct URL for VLC/mpv for when
   you want to play the original.
 
@@ -92,6 +96,9 @@ LIBRARIES=Anime=/media/anime:shows;TV=/media/tv:shows;Movies=/media/movies:movie
 | `SCAN_INTERVAL`   | `1800`                | Seconds between scans, `0` = only on start and on demand |
 | `PROBE_WORKERS`   | `4`                   | Parallel ffprobe processes during scans |
 | `THUMB_WORKERS`   | `2`                   | Parallel thumbnail generators |
+| `TMDB_API_KEY`    |                       | Turns on metadata lookups, see below. A v3 API key or a v4 read access token |
+| `TMDB_LANGUAGE`   | `en-US`               | Language of descriptions and posters |
+| `METADATA_REFRESH_DAYS` | `30`            | Look a title up again after this many days (new posters, late matches) |
 | `PORT`            | `8097`                | |
 | `LOG_LEVEL`       | `INFO`                | |
 
@@ -121,8 +128,9 @@ Movies/Heat (1995)/Heat (1995).mkv
 - `SxxEyy`, `SxxEyy-Ezz`, `1x02`, `Episode 5`, `Show - 05`/`05v2` are
   recognised. Years are never taken for episode numbers.
 - Posters: `poster.jpg`/`folder.jpg`/`cover.jpg` in the series or movie
-  folder. Episode thumbnails: `<file>-thumb.jpg`. Everything else gets a
-  frame grabbed from the video.
+  folder, then the TMDB poster if [metadata](#metadata) is on. Episode
+  thumbnails: `<file>-thumb.jpg`. Everything else gets a frame grabbed
+  from the video.
 - Skipped: samples (`*-sample.mkv`, `sample.mkv`), Jellyfin extras
   (`-trailer`, `-featurette`, …), `Extras`/`Trailers`/`NC`/`Menus`/`SPs`
   folders, and NAS clutter (`@eaDir`, `.@__thumb`, `#recycle`, hidden dirs).
@@ -132,6 +140,31 @@ Movies/Heat (1995)/Heat (1995).mkv
 - Files ffprobe cannot read and library folders that are missing are
   listed on the Problems page (`#/problems`, linked from the home page and
   the scan status), with a button to scan and retry them.
+
+## Metadata
+
+Off by default. Get a free API key at
+<https://www.themoviedb.org/settings/api> and set `TMDB_API_KEY` (either
+the "API Key" or the longer "API Read Access Token" works).
+
+Every scan then gets a *metadata* step after probing. It searches TMDB
+for each series (as a TV show) and each movie by its cleaned-up title and
+year, and keeps the first result's poster and description. Only titles
+that are new, whose folder name changed, or that were last looked up more
+than `METADATA_REFRESH_DAYS` ago are sent, so a scan with nothing new makes
+no requests. If TMDB can't be reached or rejects the key, the step stops
+and everything already fetched stays as it was; the next scan tries again.
+
+- A `poster.jpg`/`folder.jpg` next to the media still wins over TMDB.
+- **Wrong match?** Put the TMDB id in the folder (or movie file) name,
+  Jellyfin style: `Show (2020) [tmdbid-1399]` or `Heat {tmdb-949}`. The tag
+  is stripped from the displayed title.
+- Series pages show the description under the title. Episodes keep their
+  own names and frame thumbnails; only series and movies are looked up.
+- Everything lives in `/cache` (`library.db` and `metadata/`), so wiping
+  the cache only costs one more round of lookups.
+
+This product uses the TMDB API but is not endorsed or certified by TMDB.
 
 ## How playback is decided
 

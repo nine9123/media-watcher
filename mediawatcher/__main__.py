@@ -8,6 +8,7 @@ import os
 from . import config
 from .db import Database
 from .images import Images
+from .metadata import Metadata
 from .scanner import Scanner
 from .server import App, make_server
 
@@ -25,7 +26,9 @@ def main() -> None:
         log.info("library %r -> %s (%s)", lib.name, lib.path, lib.type)
     db = Database(cfg.cache_dir, cfg.config_dir)
     images = Images(cfg, db)
-    scanner = Scanner(cfg, db, images)
+    metadata = Metadata(cfg, db, images) if cfg.tmdb_api_key else None
+    log.info("metadata from TMDB: %s", "on" if metadata else "off (set TMDB_API_KEY)")
+    scanner = Scanner(cfg, db, images, metadata)
     scanner.start()
     server = make_server(App(cfg, db, images, scanner))
     log.info("listening on http://%s:%d", cfg.host, cfg.port)
