@@ -92,7 +92,7 @@ class Scanner:
         self.cfg = cfg
         self.db = db
         self.images = images
-        self.metadata = metadata  # metadata.Metadata, or None when TMDB is not configured
+        self.metadata = metadata  # metadata.Metadata, or None when METADATA_SOURCES is empty
         self.status: dict = {"running": False, "phase": "idle", "files": 0, "to_probe": 0,
                              "probed": 0, "to_fetch": 0, "fetched": 0, "last_scan": None,
                              "last_duration": None, "error": None}

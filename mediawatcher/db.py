@@ -2,7 +2,7 @@
 
 Two database files:
   * CACHE_DIR/library.db  - everything derived from the media (scan + probe
-    results, TMDB metadata when enabled). Disposable: delete it and the next scan rebuilds it.
+    results, TMDB/AniList metadata). Disposable: delete it and the next scan rebuilds it.
   * CONFIG_DIR/state.db   - watch progress. Small, keep it.
 
 Item ids are a hash of (library name, path relative to the library root), so
@@ -67,6 +67,7 @@ CREATE TABLE IF NOT EXISTS metadata (
     kind TEXT NOT NULL,
     query TEXT NOT NULL,
     tmdb_id INTEGER,
+    anilist_id INTEGER,
     title TEXT,
     year INTEGER,
     overview TEXT,
@@ -124,6 +125,10 @@ class Database:
                 # more so existing libraries get them too.
                 c.execute("ALTER TABLE items ADD COLUMN skips TEXT")
                 c.execute("UPDATE items SET probed=0 WHERE probed=1")
+                c.commit()
+            meta_cols = {r["name"] for r in c.execute("PRAGMA table_info(metadata)")}
+            if "anilist_id" not in meta_cols:
+                c.execute("ALTER TABLE metadata ADD COLUMN anilist_id INTEGER")
                 c.commit()
 
     def _open(self) -> sqlite3.Connection:

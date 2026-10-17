@@ -17,8 +17,10 @@ services:
       AUDIO_CHANNELS: "2"
       HWACCEL: "none"   # "vaapi" together with the devices/group_add below
       SCAN_INTERVAL: "1800"
-      # Optional: posters and descriptions from TMDB. Put TMDB_API_KEY in .env.
+      # Posters and descriptions: TMDB first (needs TMDB_API_KEY in .env), then
+      # AniList (no key). METADATA_SOURCES: "" turns lookups off.
       TMDB_API_KEY: ${TMDB_API_KEY:-}
+      METADATA_SOURCES: "tmdb,anilist"
     volumes:
       - /path/to/media:/media:ro                 # your library, read-only
       - /path/to/ssd/media-watcher/cache:/cache  # disposable: db + thumbnails

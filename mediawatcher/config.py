@@ -32,9 +32,11 @@ class Config:
     video_crf: int = 21
     x264_preset: str = "veryfast"
     transcode_threads: int = 4  # libx264 threads; 0 lets x264 pick (1.5 x cores)
-    tmdb_api_key: str = ""  # empty: no metadata lookups at all
+    tmdb_api_key: str = ""  # empty: TMDB is skipped
     tmdb_language: str = "en-US"
     metadata_refresh_days: int = 30
+    # Tried in order, first match wins. Empty: no metadata lookups at all.
+    metadata_sources: list[str] = field(default_factory=lambda: ["tmdb", "anilist"])
     ffmpeg: str = "ffmpeg"
     ffprobe: str = "ffprobe"
     web_dir: str = ""
@@ -69,6 +71,20 @@ def _libraries_from_env(spec: str, media_root: str) -> list[Library]:
     return libs
 
 
+def _metadata_sources(spec: str) -> list[str]:
+    """METADATA_SOURCES="tmdb,anilist"; "" or "none" turns metadata off."""
+    out = []
+    for s in spec.split(","):
+        s = s.strip().lower()
+        if s in ("", "none"):
+            continue
+        if s not in ("tmdb", "anilist"):
+            raise SystemExit(f"METADATA_SOURCES: unknown source {s!r} (tmdb, anilist)")
+        if s not in out:
+            out.append(s)
+    return out
+
+
 def load(env: dict[str, str] | None = None) -> Config:
     env = dict(os.environ if env is None else env)
     key = env.get("API_KEY", "").strip()
@@ -97,9 +113,13 @@ def load(env: dict[str, str] | None = None) -> Config:
         video_crf=int(env.get("VIDEO_CRF", "21")),
         x264_preset=env.get("X264_PRESET", "veryfast"),
         transcode_threads=max(0, int(env.get("TRANSCODE_THREADS", "4"))),
-        tmdb_api_key=env.get("TMDB_API_KEY", "").strip(),
+        # TMDB_DEFAULT_API_KEY is baked into the image at build time (see the
+        # Dockerfile), so a TMDB_API_KEY left empty in compose still falls back to it.
+        tmdb_api_key=(env.get("TMDB_API_KEY", "").strip()
+                      or env.get("TMDB_DEFAULT_API_KEY", "").strip()),
         tmdb_language=env.get("TMDB_LANGUAGE", "en-US").strip() or "en-US",
         metadata_refresh_days=max(1, int(env.get("METADATA_REFRESH_DAYS", "30"))),
+        metadata_sources=_metadata_sources(env.get("METADATA_SOURCES", "tmdb,anilist")),
         ffmpeg=env.get("FFMPEG", "ffmpeg"),
         ffprobe=env.get("FFPROBE", "ffprobe"),
         web_dir=env.get("WEB_DIR", os.path.join(os.path.dirname(here), "web")),

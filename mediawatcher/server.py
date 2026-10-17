@@ -260,7 +260,7 @@ class App:
         }
 
     def series(self, sid: str) -> dict:
-        s = self.db.one("SELECT s.*, m.overview, m.tmdb_id, m.art_at FROM series s "
+        s = self.db.one("SELECT s.*, m.overview, m.tmdb_id, m.anilist_id, m.art_at FROM series s "
                         "LEFT JOIN metadata m ON m.id=s.id WHERE s.id=?", (sid,))
         if s is None:
             raise HttpError(404, "no such series")
@@ -274,7 +274,8 @@ class App:
                 resume = regular[0]
         return {
             "id": s["id"], "title": s["title"], "year": s["year"], "library": s["library"],
-            "overview": s["overview"], "tmdb_id": s["tmdb_id"], "art_v": _art_v(s["art_at"]),
+            "overview": s["overview"], "tmdb_id": s["tmdb_id"], "anilist_id": s["anilist_id"],
+            "art_v": _art_v(s["art_at"]),
             "episodes": [self.item_json(e) for e in eps],
             "next_id": resume["id"] if resume else None,
         }
@@ -577,9 +578,11 @@ class Handler(BaseHTTPRequestHandler):
         out = self.app.item_json(r)
         out["streams"] = json.loads(r["streams"] or "[]")
         out["path"] = r["rel_path"]
-        m = self.app.db.one("SELECT overview, tmdb_id FROM metadata WHERE id=?", (iid,))
+        m = self.app.db.one("SELECT overview, tmdb_id, anilist_id FROM metadata WHERE id=?",
+                            (iid,))
         out["overview"] = m["overview"] if m else None
         out["tmdb_id"] = m["tmdb_id"] if m else None
+        out["anilist_id"] = m["anilist_id"] if m else None
         self.send_json(out)
 
     @route("GET", r"/api/search")
