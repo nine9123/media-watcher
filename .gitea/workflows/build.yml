@@ -8,9 +8,10 @@ on:
 env:
   REGISTRY: gitea.internal:30008
   IMAGE_NAME: nine9/media-watcher
-  # Passed to the Dockerfile's EXTRA_PACKAGES build arg. Empty = software
-  # transcoding only. For HWACCEL=vaapi on an Intel iGPU set it to
-  # "intel-media-va-driver", on AMD "mesa-va-drivers".
+  # Passed to the Dockerfile's EXTRA_PACKAGES build arg: Debian packages on
+  # top of ffmpeg. The Intel (iHD) and AMD VAAPI drivers are already in the
+  # image by default; for an Intel iGPU older than Broadwell add
+  # "i965-va-driver".
   EXTRA_PACKAGES: ""
   # Base image for the Dockerfile's FROM. Defaults to Docker Hub; set the
   # repository variable BASE_IMAGE to a mirror or a copy in the Gitea

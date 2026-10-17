@@ -34,10 +34,10 @@ The runner has to be able to run `docker build`, i.e. have a Docker socket —
 the same runner that builds mediavault will do. If `REGISTRY` or `IMAGE_NAME`
 in the workflow differ for your setup, change them there.
 
-Hardware transcoding drivers are not in the image by default. For
-`HWACCEL=vaapi`, set `EXTRA_PACKAGES` at the top of the workflow
-(`intel-media-va-driver` for Intel, `mesa-va-drivers` for AMD) and push, or
-the image will start but every VAAPI transcode will fail.
+The image includes the VAAPI drivers for `HWACCEL=vaapi` by default
+(`intel-media-va-driver` for Intel Broadwell and newer, `mesa-va-drivers` for
+AMD). Only for an Intel iGPU older than Broadwell set `EXTRA_PACKAGES` at the
+top of the workflow to `i965-va-driver` and push.
 
 The build pulls `python:3.12-slim` from Docker Hub, retrying a few times. If
 it still fails with `TLS handshake timeout` on `auth.docker.io`, the runner's
@@ -146,8 +146,8 @@ change only the left side (`"8098:8097"`).
 
 ### Hardware transcoding (Intel/AMD)
 
-Only with an image built with `EXTRA_PACKAGES` (step 1). Find the group that
-owns the render node from the TrueNAS shell:
+The drivers are in the image already (step 1). Find the group that owns the
+render node from the TrueNAS shell:
 
 ```sh
 stat -c '%g' /dev/dri/renderD128
