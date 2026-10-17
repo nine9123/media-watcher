@@ -12,6 +12,10 @@ env:
   # transcoding only. For HWACCEL=vaapi on an Intel iGPU set it to
   # "intel-media-va-driver", on AMD "mesa-va-drivers".
   EXTRA_PACKAGES: ""
+  # The default TMDB key baked into the image comes from the repository
+  # secret TMDB_API_KEY (a free key from themoviedb.org). Without the secret
+  # the image has no default and posters come from AniList only, unless the
+  # container sets TMDB_API_KEY itself.
 
 jobs:
   build:
@@ -31,6 +35,7 @@ jobs:
           docker build \
             --platform linux/amd64 \
             --build-arg EXTRA_PACKAGES="${{ env.EXTRA_PACKAGES }}" \
+            --build-arg TMDB_API_KEY="${{ secrets.TMDB_API_KEY }}" \
             --label "org.opencontainers.image.revision=${{ gitea.sha }}" \
             -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${SHA_SHORT} \
             -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest \

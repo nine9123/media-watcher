@@ -1,7 +1,8 @@
 """Posters and thumbnails, cached on the SSD.
 
 Sidecar images next to the media (poster.jpg, folder.jpg, <name>-thumb.jpg)
-win; otherwise a frame is grabbed with ffmpeg. Everything is downscaled once
+win, then a poster downloaded from TMDB (series and movies, see metadata.py);
+otherwise a frame is grabbed with ffmpeg. Everything is downscaled once
 so library grids never pull multi-megabyte posters over SMB.
 """
 
@@ -37,6 +38,8 @@ class Images:
         self.db = db
         self.dir = os.path.join(cfg.cache_dir, "images")
         os.makedirs(self.dir, exist_ok=True)
+        self.meta_dir = os.path.join(cfg.cache_dir, "metadata")
+        os.makedirs(self.meta_dir, exist_ok=True)
         self._sem = threading.Semaphore(cfg.thumb_workers)
         # A fixed set of striped locks: one per path would grow forever.
         self._locks = [threading.Lock() for _ in range(LOCK_STRIPES)]
@@ -46,6 +49,14 @@ class Images:
 
     def cache_path(self, kind: str, id_: str) -> str:
         return os.path.join(self.dir, f"{kind}-{id_}.jpg")
+
+    def meta_poster_path(self, id_: str) -> str:
+        """Full-size poster downloaded by metadata.py for a series or movie."""
+        return os.path.join(self.meta_dir, f"{id_}.jpg")
+
+    def meta_poster(self, id_: str) -> str | None:
+        path = self.meta_poster_path(id_)
+        return path if os.path.exists(path) else None
 
     def failed_path(self, kind: str, id_: str) -> str:
         """Zero-byte marker: no image could be made from the current source."""
@@ -120,12 +131,15 @@ class Images:
         return ok
 
     def item_image(self, item_id: str) -> str | None:
-        row = self.db.one("SELECT path, image, duration FROM items WHERE id=?", (item_id,))
+        row = self.db.one("SELECT path, kind, image, duration FROM items WHERE id=?", (item_id,))
         if row is None:
             return None
         out = self.cache_path("item", item_id)
         failed = self.failed_path("item", item_id)
-        source = row["image"] or row["path"]
+        image = row["image"]
+        if not image and row["kind"] == "movie":
+            image = self.meta_poster(item_id)
+        source = image or row["path"]
         if self._fresh(out, source):
             return out
         with self._lock(out):
@@ -133,8 +147,8 @@ class Images:
                 return out
             if self._fresh(failed, source):
                 return None  # tried before and failed; the scanner clears this on change
-            if row["image"] and os.path.exists(row["image"]):
-                if self._resize(row["image"], out, THUMB_WIDTH):
+            if image and os.path.exists(image):
+                if self._resize(image, out, THUMB_WIDTH):
                     return out
             if self._frame(row["path"], row["duration"], out):
                 return out
@@ -147,12 +161,14 @@ class Images:
         row = self.db.one("SELECT poster FROM series WHERE id=?", (series_id,))
         if row is None:
             return None
-        if row["poster"] and os.path.exists(row["poster"]):
+        poster = row["poster"] if row["poster"] and os.path.exists(row["poster"]) else None
+        poster = poster or self.meta_poster(series_id)
+        if poster:
             out = self.cache_path("series", series_id)
-            if self._fresh(out, row["poster"]):
+            if self._fresh(out, poster):
                 return out
             with self._lock(out):
-                if self._fresh(out, row["poster"]) or self._resize(row["poster"], out, POSTER_WIDTH):
+                if self._fresh(out, poster) or self._resize(poster, out, POSTER_WIDTH):
                     return out
         first = self.db.one(
             "SELECT id FROM items WHERE series_id=? ORDER BY season=0, season, episode IS NULL, "

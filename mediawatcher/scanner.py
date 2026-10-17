@@ -1,4 +1,5 @@
-"""Library scanning: walk, parse names, probe new files, clean up removed ones."""
+"""Library scanning: walk, parse names, probe new files, clean up removed ones,
+fetch metadata when it is enabled."""
 
 from __future__ import annotations
 
@@ -87,13 +88,14 @@ def merge_series_dirs(series: dict[str, dict]) -> dict[str, str]:
 
 
 class Scanner:
-    def __init__(self, cfg: Config, db: Database, images: Images):
+    def __init__(self, cfg: Config, db: Database, images: Images, metadata=None):
         self.cfg = cfg
         self.db = db
         self.images = images
+        self.metadata = metadata  # metadata.Metadata, or None when METADATA_SOURCES is empty
         self.status: dict = {"running": False, "phase": "idle", "files": 0, "to_probe": 0,
-                             "probed": 0, "last_scan": None, "last_duration": None,
-                             "error": None}
+                             "probed": 0, "to_fetch": 0, "fetched": 0, "last_scan": None,
+                             "last_duration": None, "error": None}
         self._run_lock = threading.Lock()
         self._wake = threading.Event()
         self._retry_errors = False
@@ -126,12 +128,19 @@ class Scanner:
             retry = self._retry_errors
             self._retry_errors = False
             self.status.update(running=True, phase="walking", files=0, probed=0,
-                               to_probe=0, error=None)
+                               to_probe=0, to_fetch=0, fetched=0, error=None)
             for lib in self.cfg.libraries:
                 self.scan_library(lib)
             self._drop_unknown_libraries()
             self.status["phase"] = "probing"
             self.probe_pending(retry_errors=retry)
+            if self.metadata is not None:
+                self.status["phase"] = "metadata"
+                try:
+                    self.metadata.refresh(self.status)
+                except Exception as e:  # noqa: BLE001 - never worth failing a scan over
+                    log.exception("metadata failed")
+                    self.status["error"] = f"metadata: {e}"
             self.status["phase"] = "thumbnails"
             self.pregenerate_images()
             self.status.update(last_scan=time.time(), last_duration=round(time.time() - t0, 1))

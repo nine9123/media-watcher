@@ -1,8 +1,9 @@
 # Media Watcher
 
 A small, fast, single-user media server for a NAS. It does one thing: browse
-your library and play it in the browser, reliably. No metadata scraping, no
-actors, no user management, no subtitles.
+your library and play it in the browser, reliably. No actors, no user
+management, no subtitles; posters and descriptions come from TMDB and
+AniList.
 
 - **Plays everything.** Each file is played the cheapest way that works:
   direct (byte ranges, zero CPU), remux (video copied, audio converted if
@@ -28,6 +29,10 @@ actors, no user management, no subtitles.
   of the file the button goes straight to the next episode.
 - **Light on the NAS.** A remux or transcode paused for 3 minutes stops its
   ffmpeg process; pressing play restarts it at the same spot.
+- **Posters from TMDB and AniList.** Each scan looks up new series and
+  movies on [TMDB](https://www.themoviedb.org/) (with a free
+  `TMDB_API_KEY`) and then [AniList](https://anilist.co/) (anime, no key)
+  and stores a poster and a description. See [Metadata](#metadata).
 - **Download button** on every file, plus a direct URL for VLC/mpv for when
   you want to play the original.
 
@@ -92,6 +97,10 @@ LIBRARIES=Anime=/media/anime:shows;TV=/media/tv:shows;Movies=/media/movies:movie
 | `SCAN_INTERVAL`   | `1800`                | Seconds between scans, `0` = only on start and on demand |
 | `PROBE_WORKERS`   | `4`                   | Parallel ffprobe processes during scans |
 | `THUMB_WORKERS`   | `2`                   | Parallel thumbnail generators |
+| `TMDB_API_KEY`    | the image's default   | TMDB key, see below. A v3 API key or a v4 read access token |
+| `TMDB_LANGUAGE`   | `en-US`               | Language of descriptions and posters |
+| `METADATA_SOURCES` | `tmdb,anilist`       | Sources in the order they are tried; empty or `none` turns lookups off |
+| `METADATA_REFRESH_DAYS` | `30`            | Look a title up again after this many days (new posters, late matches) |
 | `PORT`            | `8097`                | |
 | `LOG_LEVEL`       | `INFO`                | |
 
@@ -121,8 +130,9 @@ Movies/Heat (1995)/Heat (1995).mkv
 - `SxxEyy`, `SxxEyy-Ezz`, `1x02`, `Episode 5`, `Show - 05`/`05v2` are
   recognised. Years are never taken for episode numbers.
 - Posters: `poster.jpg`/`folder.jpg`/`cover.jpg` in the series or movie
-  folder. Episode thumbnails: `<file>-thumb.jpg`. Everything else gets a
-  frame grabbed from the video.
+  folder, then the TMDB/AniList poster from [metadata](#metadata). Episode
+  thumbnails: `<file>-thumb.jpg`. Everything else gets a frame grabbed
+  from the video.
 - Skipped: samples (`*-sample.mkv`, `sample.mkv`), Jellyfin extras
   (`-trailer`, `-featurette`, …), `Extras`/`Trailers`/`NC`/`Menus`/`SPs`
   folders, and NAS clutter (`@eaDir`, `.@__thumb`, `#recycle`, hidden dirs).
@@ -132,6 +142,50 @@ Movies/Heat (1995)/Heat (1995).mkv
 - Files ffprobe cannot read and library folders that are missing are
   listed on the Problems page (`#/problems`, linked from the home page and
   the scan status), with a button to scan and retry them.
+
+## Metadata
+
+On by default. Every scan gets a *metadata* step after probing that looks
+each series and movie up by its cleaned-up title and year, trying the
+sources in `METADATA_SOURCES` order until one matches:
+
+1. **TMDB** (series as TV shows), first result wins. Needs a key: get a free
+   one at <https://www.themoviedb.org/settings/api> and set `TMDB_API_KEY`
+   (either the "API Key" or the longer "API Read Access Token" works).
+   Without a key TMDB is skipped.
+2. **AniList**, anime only, no key. Its search is fuzzy, so a result only
+   counts when one of its titles is the folder title, with or without a
+   subtitle (`Frieren` finds "Frieren: Beyond Journey's End", `Heat` does
+   not find "Heat Haze Days"); the folder's year breaks ties. Lookups are
+   paced to stay under AniList's rate limit (about 2 s per title), so the
+   first scan of a large anime library takes a while.
+
+**Default TMDB key.** An image can carry a default key, used whenever
+`TMDB_API_KEY` is not set: build with `--build-arg TMDB_API_KEY=<key>`, or
+add a repository secret `TMDB_API_KEY` in Gitea and the build workflow
+passes it in. The key is readable by anyone who can pull the image, so only
+do this for a private registry. A `TMDB_API_KEY` set on the container
+always wins.
+
+Only titles that are new, whose folder name changed, or that were last
+looked up more than `METADATA_REFRESH_DAYS` ago are sent, so a scan with
+nothing new makes no requests. Changing the sources (adding a TMDB key, for
+instance) looks everything up once more. If a source can't be reached or
+rejects the key, the step stops and everything already fetched stays as it
+was; the next scan tries again.
+
+- A `poster.jpg`/`folder.jpg` next to the media still wins over both.
+- **Wrong match?** Put the id in the folder (or movie file) name, Jellyfin
+  style: `Show (2020) [tmdbid-1399]`, `Heat {tmdb-949}` or
+  `Frieren [anilistid-154587]`. The tag skips the search and the other
+  source, and is stripped from the displayed title.
+- Series pages show the description under the title. Episodes keep their
+  own names and frame thumbnails; only series and movies are looked up.
+- Everything lives in `/cache` (`library.db` and `metadata/`), so wiping
+  the cache only costs one more round of lookups.
+
+This product uses the TMDB API but is not endorsed or certified by TMDB.
+Anime metadata from [AniList](https://anilist.co/).
 
 ## How playback is decided
 

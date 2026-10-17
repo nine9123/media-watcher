@@ -13,6 +13,13 @@ WORKDIR /app
 COPY mediawatcher ./mediawatcher
 COPY web ./web
 
+# Default TMDB key for this image, used when TMDB_API_KEY is not set at run
+# time. Pass your own free key (https://www.themoviedb.org/settings/api) with
+#   docker compose build --build-arg TMDB_API_KEY=...
+# It ends up readable in the image, so only for images you don't publish.
+ARG TMDB_API_KEY=""
+ENV TMDB_DEFAULT_API_KEY=${TMDB_API_KEY}
+
 # MALLOC_ARENA_MAX: glibc otherwise keeps a malloc arena per request thread
 # it has ever seen, and RSS only grows.
 ENV PYTHONUNBUFFERED=1 \

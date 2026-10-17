@@ -74,6 +74,8 @@ a#scan-status[href]:hover { text-decoration: underline; }
   object-fit: cover; flex: none; }
 .series-head h1 { margin: 0 0 .3rem; font-size: 1.8rem; }
 .series-head .meta { color: var(--dim); margin-bottom: .8rem; }
+.series-head .overview { color: var(--dim); margin: 0 0 .8rem; max-width: 46rem; line-height: 1.45;
+  display: -webkit-box; -webkit-line-clamp: 5; -webkit-box-orient: vertical; overflow: hidden; }
 .series-head .actions { display: flex; gap: .5rem; flex-wrap: wrap; }
 .tabs { display: flex; gap: .3rem; flex-wrap: wrap; margin: 1rem 0; }
 .tabs button { background: var(--bg3); }

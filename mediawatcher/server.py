@@ -74,10 +74,13 @@ class App:
     # Every row costs a GIL round trip in sqlite3, so list views read only the
     # columns item_json() needs (never the large `streams` blob) and as few
     # rows as possible. ITEM_SQL is for single items that are about to play.
+    # art_v changes whenever a downloaded poster does; the UI puts it in the
+    # image URL so browsers drop their day-long cached copy.
     _JOINS = (
         ", s.title AS series_title, p.position AS position, p.watched AS watched, "
-        "p.updated_at AS progress_at FROM items i LEFT JOIN series s ON s.id=i.series_id "
-        "LEFT JOIN st.progress p ON p.id=i.id"
+        "p.updated_at AS progress_at, m.art_at AS art_v FROM items i "
+        "LEFT JOIN series s ON s.id=i.series_id LEFT JOIN st.progress p ON p.id=i.id "
+        "LEFT JOIN metadata m ON m.id=i.id"
     )
     ITEM_SQL = "SELECT i.*" + _JOINS
     LIST_SQL = (
@@ -101,6 +104,7 @@ class App:
             "video_codec": r["video_codec"], "height": r["height"], "library": r["library"],
             "file": os.path.basename(r["path"]), "size": r["size"], "added_at": r["added_at"],
             "probe_error": r["probe_error"],
+            "art_v": _art_v(r["art_v"]) if "art_v" in keys else None,
         }
 
     def get_item(self, iid: str):
@@ -202,10 +206,10 @@ class App:
         # Recently added: newest series (by their newest episode) and movies,
         # grouped in SQL so only the 24 rows shown come back to Python.
         groups = self.db.query(
-            "SELECT g.series_id, g.id, g.added_at, s.title FROM ("
+            "SELECT g.series_id, g.id, g.added_at, s.title, m.art_at FROM ("
             "SELECT series_id, id, MAX(added_at) AS added_at FROM items "
             "GROUP BY COALESCE(series_id, id)) g LEFT JOIN series s ON s.id=g.series_id "
-            "ORDER BY g.added_at DESC LIMIT 24")
+            "LEFT JOIN metadata m ON m.id=g.series_id ORDER BY g.added_at DESC LIMIT 24")
         movie_ids = [g["id"] for g in groups if not g["series_id"]]
         movies = {r["id"]: r for r in self.db.query(
             self.LIST_SQL + f" WHERE i.id IN ({','.join('?' * len(movie_ids))})",
@@ -214,7 +218,8 @@ class App:
         for g in groups:
             if g["series_id"]:
                 recent.append({"type": "series", "id": g["series_id"],
-                               "title": g["title"], "added_at": g["added_at"]})
+                               "title": g["title"], "added_at": g["added_at"],
+                               "art_v": _art_v(g["art_at"])})
             elif g["id"] in movies:
                 recent.append({"type": "movie", **self.item_json(movies[g["id"]])})
         return {
@@ -242,19 +247,21 @@ class App:
         series = self.db.query(
             "SELECT s.id, s.title, s.year, s.sort_name, COUNT(i.id) AS episodes, "
             "SUM(COALESCE(p.watched,0)) AS watched, MAX(i.added_at) AS added_at, "
-            "MAX(p.updated_at) AS played_at FROM series s JOIN items i ON i.series_id=s.id "
-            "LEFT JOIN st.progress p ON p.id=i.id WHERE s.library=? GROUP BY s.id "
+            "MAX(p.updated_at) AS played_at, MAX(m.art_at) AS art_v FROM series s "
+            "JOIN items i ON i.series_id=s.id LEFT JOIN st.progress p ON p.id=i.id "
+            "LEFT JOIN metadata m ON m.id=s.id WHERE s.library=? GROUP BY s.id "
             "ORDER BY s.sort_name", (name,))
         movies = self.db.query(
             self.LIST_SQL + " WHERE i.library=? AND i.kind='movie' ORDER BY i.sort_name", (name,))
         return {
             "name": name,
-            "series": [dict(r) for r in series],
+            "series": [{**dict(r), "art_v": _art_v(r["art_v"])} for r in series],
             "movies": [self.item_json(r) for r in movies],
         }
 
     def series(self, sid: str) -> dict:
-        s = self.db.one("SELECT * FROM series WHERE id=?", (sid,))
+        s = self.db.one("SELECT s.*, m.overview, m.tmdb_id, m.anilist_id, m.art_at FROM series s "
+                        "LEFT JOIN metadata m ON m.id=s.id WHERE s.id=?", (sid,))
         if s is None:
             raise HttpError(404, "no such series")
         eps = self.episodes(sid)
@@ -267,6 +274,8 @@ class App:
                 resume = regular[0]
         return {
             "id": s["id"], "title": s["title"], "year": s["year"], "library": s["library"],
+            "overview": s["overview"], "tmdb_id": s["tmdb_id"], "anilist_id": s["anilist_id"],
+            "art_v": _art_v(s["art_at"]),
             "episodes": [self.item_json(e) for e in eps],
             "next_id": resume["id"] if resume else None,
         }
@@ -277,12 +286,15 @@ class App:
             return {"series": [], "movies": []}
         like = "%" + q.replace("%", r"\%").replace("_", r"\_") + "%"
         series = self.db.query(
-            "SELECT id, title, year, library FROM series WHERE title LIKE ? ESCAPE '\\' "
-            "ORDER BY sort_name LIMIT 50", (like,))
+            "SELECT s.id, s.title, s.year, s.library, m.art_at FROM series s "
+            "LEFT JOIN metadata m ON m.id=s.id WHERE s.title LIKE ? ESCAPE '\\' "
+            "ORDER BY s.sort_name LIMIT 50", (like,))
         movies = self.db.query(
             self.LIST_SQL + " WHERE i.kind='movie' AND (i.title LIKE ? ESCAPE '\\' "
             "OR i.rel_path LIKE ? ESCAPE '\\') ORDER BY i.sort_name LIMIT 50", (like, like))
-        return {"series": [dict(r) for r in series], "movies": [self.item_json(r) for r in movies]}
+        series = [{"id": r["id"], "title": r["title"], "year": r["year"],
+                   "library": r["library"], "art_v": _art_v(r["art_at"])} for r in series]
+        return {"series": series, "movies": [self.item_json(r) for r in movies]}
 
     def problems(self) -> dict:
         """Files ffprobe could not read, and library folders that are not there."""
@@ -366,6 +378,10 @@ class App:
             proc = self.streams.pop(sid, None)
         if proc is not None and proc.poll() is None:
             proc.kill()
+
+
+def _art_v(t: float | None) -> str | None:
+    return f"{int(t):x}" if t else None
 
 
 def _q(query: dict, name: str) -> str | None:
@@ -562,6 +578,11 @@ class Handler(BaseHTTPRequestHandler):
         out = self.app.item_json(r)
         out["streams"] = json.loads(r["streams"] or "[]")
         out["path"] = r["rel_path"]
+        m = self.app.db.one("SELECT overview, tmdb_id, anilist_id FROM metadata WHERE id=?",
+                            (iid,))
+        out["overview"] = m["overview"] if m else None
+        out["tmdb_id"] = m["tmdb_id"] if m else None
+        out["anilist_id"] = m["anilist_id"] if m else None
         self.send_json(out)
 
     @route("GET", r"/api/search")
