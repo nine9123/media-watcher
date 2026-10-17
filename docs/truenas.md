@@ -39,6 +39,22 @@ Hardware transcoding drivers are not in the image by default. For
 (`intel-media-va-driver` for Intel, `mesa-va-drivers` for AMD) and push, or
 the image will start but every VAAPI transcode will fail.
 
+The build pulls `python:3.12-slim` from Docker Hub, retrying a few times. If
+it still fails with `TLS handshake timeout` on `auth.docker.io`, the runner's
+route to Docker Hub is the problem, not the repository. Either fix that (DNS,
+MTU, proxy on the runner host) or push a copy of the base image to the Gitea
+registry from a machine that can reach the hub:
+
+```
+docker pull python:3.12-slim
+docker tag python:3.12-slim gitea.internal:30008/nine9/python:3.12-slim
+docker push gitea.internal:30008/nine9/python:3.12-slim
+```
+
+and set the repository variable `BASE_IMAGE` (Settings → Actions → Variables)
+to `gitea.internal:30008/nine9/python:3.12-slim`. A pull-through mirror works
+the same way.
+
 ## 2. Let TrueNAS pull from the registry
 
 Gitea packages are private unless the owner is public, so TrueNAS has to sign
