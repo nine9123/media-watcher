@@ -4,14 +4,26 @@
 ARG BASE_IMAGE=python:3.12-slim
 FROM ${BASE_IMAGE}
 
-# Hardware transcoding drivers are optional. For Intel iGPUs (Synology,
-# Unraid, most mini PCs) build with:
-#   docker compose build --build-arg EXTRA_PACKAGES="intel-media-va-driver"
-# AMD: EXTRA_PACKAGES="mesa-va-drivers"
+# VAAPI drivers for HWACCEL=vaapi are included by default: mesa-va-drivers
+# for AMD, plus intel-media-va-driver (iHD, Broadwell and newer: Synology,
+# Unraid, most mini PCs) on amd64, the only architecture Debian ships it for.
+# For a smaller software-only image build with
+#   docker compose build --build-arg HWACCEL_DRIVERS=false
+# EXTRA_PACKAGES adds further Debian packages, e.g. "i965-va-driver" for
+# Intel iGPUs older than Broadwell.
+ARG HWACCEL_DRIVERS=true
 ARG EXTRA_PACKAGES=""
-RUN apt-get update \
- && apt-get install -y --no-install-recommends ffmpeg ${EXTRA_PACKAGES} \
- && rm -rf /var/lib/apt/lists/*
+RUN set -e; \
+    drivers=""; \
+    if [ "${HWACCEL_DRIVERS}" = "true" ]; then \
+      drivers="mesa-va-drivers"; \
+      if [ "$(dpkg --print-architecture)" = "amd64" ]; then \
+        drivers="${drivers} intel-media-va-driver"; \
+      fi; \
+    fi; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends ffmpeg ${drivers} ${EXTRA_PACKAGES}; \
+    rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 COPY mediawatcher ./mediawatcher
