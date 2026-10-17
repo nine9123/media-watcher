@@ -18,6 +18,7 @@ Subtitles are never mapped, in any mode.
 from __future__ import annotations
 
 import os
+import shlex
 from dataclasses import dataclass, field
 
 from .config import Config
@@ -29,6 +30,9 @@ BASE_AUDIO = {"aac", "mp3"}
 H264_OK_PIX = {"yuv420p", "yuvj420p"}
 HDR_TRANSFERS = {"smpte2084", "arib-std-b67"}
 MP4_EXTS = {".mp4", ".m4v"}
+# HDR (PQ/HLG) to SDR BT.709, so tone-mapped H.264 does not look washed out.
+TONEMAP = ("zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,"
+           "tonemap=tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv")
 
 
 @dataclass
@@ -215,10 +219,7 @@ def ffmpeg_args(cfg: Config, item: dict, d: Decision, start: float = 0.0) -> lis
             if h:
                 filters.append(f"scale=-2:{h}")
             if hdr:
-                filters.append(
-                    "zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,"
-                    "tonemap=tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv"
-                )
+                filters.append(TONEMAP)
             filters.append("format=yuv420p")
             args += [
                 "-vf", ",".join(filters),
@@ -242,6 +243,34 @@ def ffmpeg_args(cfg: Config, item: dict, d: Decision, start: float = 0.0) -> lis
         "-f", "mp4", "pipe:1",
     ]
     return args
+
+
+def convert_command(item: dict, d: Decision) -> str:
+    """One-off shell command that re-encodes the video to 8-bit H.264.
+
+    Every audio track (and, from MKV, every subtitle and font) is copied, so
+    afterwards the file only ever needs a remux instead of a CPU transcode.
+    The result is written to a temporary name first; an MKV is then replaced
+    in place, which keeps its item id and watch progress. Other containers get
+    a new .mkv next to the original.
+    """
+    by_index = {s.get("index"): s for s in item.get("streams") or []}
+    video = by_index.get(d.video_index) or {}
+    src = os.path.basename(item["path"])
+    stem, ext = os.path.splitext(src)
+    dst = stem + ".mkv"
+    mkv = ext.lower() == ".mkv"
+    args = ["ffmpeg", "-hide_banner", "-i", src, "-map", f"0:{d.video_index}", "-map", "0:a?"]
+    if mkv:
+        args += ["-map", "0:s?", "-map", "0:t?"]
+    args += ["-c", "copy", "-c:v", "libx264", "-preset", "slow", "-crf", "18",
+             "-profile:v", "high"]
+    filters = []
+    if video.get("color_transfer") in HDR_TRANSFERS:
+        filters.append(TONEMAP)
+    filters.append("format=yuv420p")
+    args += ["-vf", ",".join(filters), "-f", "matroska", dst + ".part"]
+    return shlex.join(args) + " && mv -- " + shlex.join([dst + ".part", dst])
 
 
 def describe_audio(streams: list[dict]) -> list[dict]:

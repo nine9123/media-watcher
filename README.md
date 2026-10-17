@@ -10,6 +10,9 @@ AniList.
   needed, near-zero CPU), or transcode only when the browser cannot decode
   the video codec at all. If playback fails anyway, the player steps down
   by itself (direct → remux → full transcode) instead of buffering forever.
+  When a file needs a CPU transcode, the player shows **⚠ Convert** with
+  the ffmpeg commands to re-encode it (and the rest of its folder) to
+  8-bit H.264 once, so after that it only ever needs a remux.
 - **Japanese audio, always.** The audio track is auto-selected: preferred
   language first (`AUDIO_LANGUAGES`, default Japanese), commentary tracks
   last, then the default flag. You can still switch track in the player;

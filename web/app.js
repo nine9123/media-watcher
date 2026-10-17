@@ -457,6 +457,8 @@ const Player = {
     $("#p-error").hidden = true;
     $("#p-next-overlay").hidden = true;
     $("#p-skip").hidden = true;
+    $("#p-convert").hidden = true;
+    $("#p-convert-btn").hidden = true;
     $("#p-title").textContent = "";
     $("#p-sub").textContent = "";
     this.load(null);
@@ -605,6 +607,17 @@ const Player = {
     mode.textContent = { direct: "Direct", remux: "Remux", transcode: "Transcode" }[this.info.mode];
     mode.className = "badge " + this.info.mode;
     mode.title = `${this.info.reason}\nvideo: ${this.info.video}, audio: ${this.info.audio}`;
+    const conv = this.info.convert;
+    $("#p-convert-btn").hidden = !conv;
+    if (!conv) $("#p-convert").hidden = true;
+    else {
+      $("#p-convert-reason").textContent = conv.reason;
+      $("#p-convert-folder").textContent = conv.folder;
+      $("#p-convert-file").textContent = conv.file_command;
+      $("#p-convert-all").hidden = conv.files < 2;
+      $("#p-convert-count").textContent = conv.files;
+      $("#p-convert-folder-cmd").textContent = conv.folder_command;
+    }
     $("#p-prev").hidden = !this.info.prev_id;
     $("#p-next").hidden = !this.info.next_id;
     $("#p-download").href = `/file/${it.id}?download=1`;
@@ -731,7 +744,7 @@ const Player = {
     p.classList.remove("idle");
     clearTimeout(this.timers.idle);
     this.timers.idle = setTimeout(() => {
-      if (!video.paused && $("#p-audio-menu").hidden && $("#p-speed-menu").hidden) p.classList.add("idle");
+      if (!video.paused && $("#p-audio-menu").hidden && $("#p-speed-menu").hidden && $("#p-convert").hidden) p.classList.add("idle");
     }, 3000);
   },
 
@@ -776,6 +789,24 @@ $("#p-volume").oninput = (e) => { video.muted = false; video.volume = Number(e.t
 $("#p-skip").onclick = () => Player.skip();
 $("#p-next-now").onclick = () => Player.go(Player.info.next_id);
 $("#p-next-cancel").onclick = () => { clearTimeout(Player.timers.next); $("#p-next-overlay").hidden = true; };
+$("#p-convert-btn").onclick = () => { $("#p-convert").hidden = !$("#p-convert").hidden; };
+$("#p-convert-close").onclick = () => { $("#p-convert").hidden = true; };
+$("#p-convert").addEventListener("click", async (e) => {
+  const b = e.target.closest("button[data-copy]");
+  if (!b) return;
+  const pre = $("#" + b.dataset.copy);
+  try {
+    await navigator.clipboard.writeText(pre.textContent);  // only on https or localhost
+  } catch (err) {
+    const range = document.createRange();
+    range.selectNodeContents(pre);
+    getSelection().removeAllRanges();
+    getSelection().addRange(range);
+    document.execCommand("copy");
+  }
+  b.textContent = "Copied";
+  setTimeout(() => { b.textContent = "Copy"; }, 1500);
+});
 $("#p-audio-btn").onclick = (e) => {
   e.stopPropagation();
   $("#p-speed-menu").hidden = true;
@@ -839,6 +870,7 @@ $("#player").addEventListener("pointermove", () => Player.poke());
 document.addEventListener("keydown", (e) => {
   if (!Player.active || e.target.tagName === "INPUT") return;
   const k = e.key;
+  if (k === "Escape" && !$("#p-convert").hidden) { $("#p-convert").hidden = true; e.preventDefault(); return; }
   const step = (s) => Player.seek(Player.time() + s);
   if (k === " " || k === "k") Player.togglePlay();
   else if (k === "ArrowRight" || k === "l") step(k === "l" ? 30 : 10);
