@@ -72,6 +72,10 @@ or "film" is treated as movies only; everything else is auto-detected per
 file. Mount your shows *inside* a library folder, not at `/media` itself,
 or every show becomes its own library.
 
+A show folder with no video files in it yet (outside movie libraries) still
+appears in its library, as a series with no episodes marked **MISSING**, so
+you can see what should be there. It fills in once episodes show up.
+
 To be explicit, set `LIBRARIES` (`Name=/path:type`, `;`-separated, type is
 `auto`, `shows` or `movies`):
 

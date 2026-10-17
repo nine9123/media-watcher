@@ -271,6 +271,13 @@ def _series_from_dirs(dirs: list[str]):
     return title, year, name, season
 
 
+def series_from_dir(name: str) -> tuple[str | None, int | None]:
+    """(title, year) of the series a top-level library folder would hold;
+    title is None when the folder is a season folder, not a show."""
+    title, year, _, _ = _series_from_dirs([name])
+    return title, year
+
+
 def _parse_episode(stem: str, dirs: list[str], library_type: str, siblings: int):
     found = _match_episode(stem)
     if found is None and len(dirs) >= 2:

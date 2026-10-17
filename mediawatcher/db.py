@@ -60,7 +60,8 @@ CREATE TABLE IF NOT EXISTS series (
     dir TEXT,
     poster TEXT,
     sort_name TEXT NOT NULL,
-    added_at REAL NOT NULL
+    added_at REAL NOT NULL,
+    missing INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS metadata (
     id TEXT PRIMARY KEY,
@@ -125,6 +126,11 @@ class Database:
                 # more so existing libraries get them too.
                 c.execute("ALTER TABLE items ADD COLUMN skips TEXT")
                 c.execute("UPDATE items SET probed=0 WHERE probed=1")
+                c.commit()
+            series_cols = {r["name"] for r in c.execute("PRAGMA table_info(series)")}
+            if "missing" not in series_cols:
+                # 1 = an empty show folder, kept as a series with no episodes.
+                c.execute("ALTER TABLE series ADD COLUMN missing INTEGER NOT NULL DEFAULT 0")
                 c.commit()
             meta_cols = {r["name"] for r in c.execute("PRAGMA table_info(metadata)")}
             if "anilist_id" not in meta_cols:
