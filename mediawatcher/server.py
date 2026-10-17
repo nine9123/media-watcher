@@ -232,13 +232,15 @@ class App:
 
     def libraries(self) -> list[dict]:
         counts = {r["library"]: r for r in self.db.query(
-            "SELECT library, COUNT(DISTINCT series_id) AS series, "
-            "SUM(kind='movie') AS movies FROM items GROUP BY library")}
+            "SELECT library, SUM(kind='movie') AS movies FROM items GROUP BY library")}
+        # From the series table, so empty show folders (no episodes) count too.
+        series = {r["library"]: r["n"] for r in self.db.query(
+            "SELECT library, COUNT(*) AS n FROM series GROUP BY library")}
         out = []
         for lib in self.cfg.libraries:
             c = counts.get(lib.name)
-            out.append({"name": lib.name, "type": lib.type,
-                        "series": c["series"] if c else 0, "movies": c["movies"] if c else 0})
+            out.append({"name": lib.name, "type": lib.type, "series": series.get(lib.name, 0),
+                        "movies": c["movies"] if c else 0})
         return out
 
     def library(self, name: str) -> dict:
@@ -248,7 +250,7 @@ class App:
             "SELECT s.id, s.title, s.year, s.sort_name, COUNT(i.id) AS episodes, "
             "SUM(COALESCE(p.watched,0)) AS watched, MAX(i.added_at) AS added_at, "
             "MAX(p.updated_at) AS played_at, MAX(m.art_at) AS art_v FROM series s "
-            "JOIN items i ON i.series_id=s.id LEFT JOIN st.progress p ON p.id=i.id "
+            "LEFT JOIN items i ON i.series_id=s.id LEFT JOIN st.progress p ON p.id=i.id "
             "LEFT JOIN metadata m ON m.id=s.id WHERE s.library=? GROUP BY s.id "
             "ORDER BY s.sort_name", (name,))
         movies = self.db.query(

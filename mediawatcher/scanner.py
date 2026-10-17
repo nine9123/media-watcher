@@ -254,6 +254,21 @@ class Scanner:
                     row["_series_key"] = "loose:" + tkey
                     series.setdefault(row["_series_key"], row["_series"])
 
+        # Top-level folders with no video in them yet are shows that should be
+        # there but aren't: list them as series with no episodes ("missing"),
+        # unless a series of that title already exists.
+        if lib.type != "movies":
+            used = {row["rel_path"].split("/")[0] for row in rows if "/" in row["rel_path"]}
+            titles = {naming.title_key(s["title"]) for s in series.values()}
+            for d in sorted(dirs):
+                if not d or "/" in d or d in used or d in series:
+                    continue
+                title, year = naming.series_from_dir(d)
+                if not title or naming.title_key(title) in titles:
+                    continue
+                titles.add(naming.title_key(title))
+                series[d] = {"title": title, "year": year, "dir": d, "missing": True}
+
         stmts = []
         now = time.time()
         series_ids = {}
@@ -269,13 +284,21 @@ class Scanner:
                     break
             posters[sid] = poster
             stmts.append((
-                "INSERT INTO series(id, library, title, year, dir, poster, sort_name, added_at) "
-                "VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET title=excluded.title, "
-                "year=excluded.year, dir=excluded.dir, poster=excluded.poster, "
-                "sort_name=excluded.sort_name",
+                "INSERT INTO series(id, library, title, year, dir, poster, sort_name, added_at, "
+                "missing) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET "
+                "title=excluded.title, year=excluded.year, dir=excluded.dir, "
+                "poster=excluded.poster, sort_name=excluded.sort_name, missing=excluded.missing",
                 (sid, lib.name, s["title"], s["year"], s["dir"], poster,
-                 naming.sort_key(s["title"]), now),
+                 naming.sort_key(s["title"]), now, int(s.get("missing", False))),
             ))
+        # Empty folders that are gone (or have episodes now) lose their mark,
+        # so _drop_empty_series removes the ones left with no episodes.
+        missing_ids = [series_ids[k] for k, s in series.items() if s.get("missing")]
+        marks = ",".join("?" * len(missing_ids)) or "''"
+        stmts.append((
+            f"UPDATE series SET missing=0 WHERE library=? AND missing=1 AND id NOT IN ({marks})",
+            (lib.name, *missing_ids),
+        ))
 
         for row in rows:
             if row["kind"] == "episode":
@@ -326,7 +349,8 @@ class Scanner:
 
     def _drop_empty_series(self) -> None:
         gone = self.db.query(
-            "SELECT id FROM series WHERE NOT EXISTS (SELECT 1 FROM items WHERE series_id=series.id)")
+            "SELECT id FROM series WHERE missing=0 "
+            "AND NOT EXISTS (SELECT 1 FROM items WHERE series_id=series.id)")
         if gone:
             self.db.write_many([("DELETE FROM series WHERE id=?", (r["id"],)) for r in gone])
             for r in gone:

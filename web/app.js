@@ -57,8 +57,9 @@ const bar = (p) => (p > 0 ? `<div class="bar"><i style="width:${p.toFixed(1)}%">
 
 function seriesCard(s) {
   const unwatched = (s.episodes || 0) - (s.watched || 0);
-  const badge = s.episodes == null ? "" : unwatched > 0
-    ? `<span class="badge">${unwatched}</span>` : `<span class="badge done">✓</span>`;
+  // An empty show folder: the series should be there but has no episodes yet.
+  const badge = s.episodes == null ? "" : s.episodes === 0 ? `<span class="badge missing">MISSING</span>`
+    : unwatched > 0 ? `<span class="badge">${unwatched}</span>` : `<span class="badge done">✓</span>`;
   const sub = [s.year, s.episodes != null ? `${s.episodes} ep` : ""].filter(Boolean).join(" · ");
   return `<a class="card" href="#/series/${s.id}"><div class="img">${badge}${esc(s.title)}${img(art("series", s))}</div>
     <div class="t" title="${esc(s.title)}">${esc(s.title)}</div><div class="s">${esc(sub)}</div></a>`;
@@ -210,13 +211,18 @@ function viewSeries(id) {
       <div><h1>${esc(d.title)}</h1>
       <div class="meta">${[d.year, `${d.episodes.length} episodes`, `${watched} watched`].filter(Boolean).join(" · ")}</div>
       ${d.overview ? `<p class="overview">${esc(d.overview)}</p>` : ""}
-      <div class="actions">${next ? `<a class="btn" href="#/play/${next.id}">${esc(playLabel)}</a>` : ""}
+      ${d.episodes.length ? `<div class="actions">${next ? `<a class="btn" href="#/play/${next.id}">${esc(playLabel)}</a>` : ""}
         <button class="secondary" id="mark-season">Mark season watched</button>
-        <button class="secondary" id="unmark-season">Mark season unwatched</button></div></div></div>
+        <button class="secondary" id="unmark-season">Mark season unwatched</button></div>`
+        : `<div class="actions"><span class="badge missing">MISSING</span></div>`}</div></div>
       ${seasons.length > 1 ? `<div class="tabs">${seasons.map((s) =>
         `<button data-season="${s}" class="${s === season ? "active" : ""}">${s === 0 ? "Specials" : "Season " + s}</button>`).join("")}</div>` : ""}
       <div class="episodes"></div>`;
     const drawEpisodes = () => {
+      if (!d.episodes.length) {
+        $(".episodes").innerHTML = `<p class="empty">No episodes yet: the folder is empty.</p>`;
+        return;
+      }
       $(".episodes").innerHTML = d.episodes.filter((e) => e.season === season).map((e) => `
         <div class="ep ${e.watched ? "watched" : ""}" data-id="${e.id}">
           <div class="img">${img("/img/item/" + e.id)}${bar(pct(e))}</div>
@@ -249,8 +255,10 @@ function viewSeries(id) {
       await api(`/api/series/${id}/watched`, { body: { watched, season } });
       cache.delete(key); viewSeries(id);
     };
-    $("#mark-season").onclick = () => markSeason(true);
-    $("#unmark-season").onclick = () => markSeason(false);
+    if (d.episodes.length) {
+      $("#mark-season").onclick = () => markSeason(true);
+      $("#unmark-season").onclick = () => markSeason(false);
+    }
     if (restore) restoreScroll();
   });
 }

@@ -7,6 +7,7 @@ progress and byte-range paths must all work without them.
 import http.client
 import json
 import os
+import shutil
 import threading
 
 import pytest
@@ -114,6 +115,39 @@ def test_library_grouping_and_cleanup(env):
     env["scanner"].scan()
     lib = get_json(env, "/api/libraries/Shows")
     assert lib["series"][0]["episodes"] == 4
+
+
+def test_empty_show_folder_is_a_missing_series(env):
+    os.makedirs(os.path.join(env["shows"], "Later Show (2024)", "Season 01"))
+    os.makedirs(os.path.join(env["shows"], "Show"))  # same title as an existing series
+    os.makedirs(os.path.join(env["movies"], "Empty Film (2001)"))
+    env["scanner"].scan()
+    lib = get_json(env, "/api/libraries/Shows")
+    assert [(s["title"], s["episodes"]) for s in lib["series"]] == [("Later Show", 0), ("Show", 5)]
+    assert get_json(env, "/api/libraries/Movies")["series"] == []
+    assert {l["name"]: l["series"] for l in get_json(env, "/api/home")["libraries"]} \
+        == {"Shows": 2, "Movies": 0}
+    sid = lib["series"][0]["id"]
+    s = get_json(env, f"/api/series/{sid}")
+    assert (s["title"], s["year"], s["episodes"]) == ("Later Show", 2024, [])
+
+    # Episodes arrive: same series, now with an episode.
+    touch(env["shows"], "Later Show (2024)/Season 01/Later Show - S01E01.mkv")
+    env["scanner"].scan()
+    lib = get_json(env, "/api/libraries/Shows")
+    assert (lib["series"][0]["id"], lib["series"][0]["episodes"]) == (sid, 1)
+
+    # The folder is deleted: the series goes.
+    shutil.rmtree(os.path.join(env["shows"], "Later Show (2024)"))
+    env["scanner"].scan()
+    assert [s["title"] for s in get_json(env, "/api/libraries/Shows")["series"]] == ["Show"]
+
+    os.makedirs(os.path.join(env["shows"], "Gone Soon"))
+    env["scanner"].scan()
+    assert len(get_json(env, "/api/libraries/Shows")["series"]) == 2
+    os.rmdir(os.path.join(env["shows"], "Gone Soon"))
+    env["scanner"].scan()
+    assert [s["title"] for s in get_json(env, "/api/libraries/Shows")["series"]] == ["Show"]
 
 
 def test_unmounted_share_does_not_wipe_library(env):

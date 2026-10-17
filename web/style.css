@@ -51,6 +51,7 @@ h2 { font-size: 1.15rem; margin: 1.4rem 0 .6rem; }
   border-radius: 999px; }
 .card .badge { position: absolute; top: .4rem; right: .4rem; z-index: 1; }
 .card .badge.done { background: var(--ok); }
+.badge.missing { background: #6b7280; letter-spacing: .03em; }
 .bar { position: absolute; left: 0; right: 0; bottom: 0; height: 4px; background: rgba(0,0,0,.6); z-index: 1; }
 .bar > i { display: block; height: 100%; background: var(--accent); }
 
