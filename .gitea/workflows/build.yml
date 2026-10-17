@@ -12,6 +12,10 @@ env:
   # transcoding only. For HWACCEL=vaapi on an Intel iGPU set it to
   # "intel-media-va-driver", on AMD "mesa-va-drivers".
   EXTRA_PACKAGES: ""
+  # Base image for the Dockerfile's FROM. Defaults to Docker Hub; set the
+  # repository variable BASE_IMAGE to a mirror or a copy in the Gitea
+  # registry if the runner can't reach Docker Hub reliably.
+  BASE_IMAGE: ${{ vars.BASE_IMAGE || 'python:3.12-slim' }}
   # The default TMDB key baked into the image comes from the repository
   # secret TMDB_API_KEY (a free key from themoviedb.org). Without the secret
   # the image has no default and posters come from AniList only, unless the
@@ -29,11 +33,27 @@ jobs:
           echo "${{ secrets.REGISTRY_TOKEN }}" | docker login ${{ env.REGISTRY }} \
             -u "${{ secrets.REGISTRY_USER }}" --password-stdin
 
+      # Docker Hub from the runner times out now and then (TLS handshake
+      # timeout on auth.docker.io). Pull the base image with retries first;
+      # the build then uses the local copy instead of going back to the hub.
+      - name: Pull base image
+        run: |
+          for attempt in 1 2 3 4 5; do
+            if docker pull --platform linux/amd64 "${{ env.BASE_IMAGE }}"; then
+              exit 0
+            fi
+            echo "Pull attempt ${attempt} failed, retrying in $((attempt * 15))s"
+            sleep $((attempt * 15))
+          done
+          echo "Could not pull ${{ env.BASE_IMAGE }} after 5 attempts" >&2
+          exit 1
+
       - name: Build image
         run: |
           SHA_SHORT=$(echo "${{ gitea.sha }}" | cut -c1-8)
           docker build \
             --platform linux/amd64 \
+            --build-arg BASE_IMAGE="${{ env.BASE_IMAGE }}" \
             --build-arg EXTRA_PACKAGES="${{ env.EXTRA_PACKAGES }}" \
             --build-arg TMDB_API_KEY="${{ secrets.TMDB_API_KEY }}" \
             --label "org.opencontainers.image.revision=${{ gitea.sha }}" \

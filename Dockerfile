@@ -1,4 +1,8 @@
-FROM python:3.12-slim
+# Overridable so a build host that can't reach Docker Hub can use a mirror
+# or a copy in its own registry, e.g.
+#   --build-arg BASE_IMAGE=gitea.internal:30008/nine9/python:3.12-slim
+ARG BASE_IMAGE=python:3.12-slim
+FROM ${BASE_IMAGE}
 
 # Hardware transcoding drivers are optional. For Intel iGPUs (Synology,
 # Unraid, most mini PCs) build with:
