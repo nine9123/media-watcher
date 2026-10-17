@@ -358,7 +358,29 @@ class App:
             "audio_index": d.audio_index, "prev_id": prev_id, "next_id": next_id,
             "next": self.item_json(nxt) if nxt else None,
             "skips": json.loads(r["skips"] or "[]"),
+            "convert": self.convert_hint(r, item, d, caps) if d.mode == "transcode"
+            and force != "transcode" and self.cfg.hwaccel == "none" else None,
         }
+
+    def convert_hint(self, r, item: dict, d: playback.Decision, caps: playback.Caps) -> dict:
+        """Commands to convert this file, and the others in its folder that
+        this browser would also have to transcode, so they only need a remux."""
+        folder = os.path.dirname(r["path"])
+        lines = [playback.convert_command(item, d)]
+        if r["series_id"]:
+            others = self.db.query(
+                "SELECT id, path, container, streams FROM items "
+                "WHERE series_id=? AND probed=1 AND id<>? ORDER BY path", (r["series_id"], r["id"]))
+            for o in others:
+                if os.path.dirname(o["path"]) != folder:
+                    continue
+                other = {"path": o["path"], "container": o["container"],
+                         "streams": json.loads(o["streams"] or "[]")}
+                od = playback.decide(other, caps, self.cfg.audio_languages)
+                if od.mode == "transcode":
+                    lines.append(playback.convert_command(other, od))
+        return {"folder": folder, "reason": d.reason, "files": len(lines),
+                "file_command": lines[0], "folder_command": "\n".join(lines)}
 
     # ---- streams ---------------------------------------------------------
     def register_stream(self, sid: str, proc: subprocess.Popen) -> None:

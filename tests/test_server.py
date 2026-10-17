@@ -437,3 +437,23 @@ def test_old_library_db_gains_skips_and_is_reprobed(tmp_path):
     rows = {r["id"]: r for r in db.query("SELECT id, probed, skips FROM items")}
     assert rows["a"]["probed"] == 0 and rows["b"]["probed"] == 2 and rows["a"]["skips"] is None
     Database(str(cache), str(tmp_path / "config"))  # second open: no reset again
+
+
+def test_playback_info_suggests_converting_cpu_transcodes(env):
+    sid = get_json(env, "/api/libraries/Shows")["series"][0]["id"]
+    eps = get_json(env, f"/api/series/{sid}")["episodes"]
+    s1 = [e for e in eps if e["season"] == 1]  # E01, E02 in "Season 01", loose 03 elsewhere
+    hevc = [{"index": 0, "type": "video", "codec": "hevc", "pix_fmt": "yuv420p10le"},
+            {"index": 1, "type": "audio", "codec": "aac", "language": "jpn", "title": "", "channels": 2}]
+    for e in eps:  # every episode HEVC, but only Season 01 shares the folder
+        env["db"].write("UPDATE items SET probed=1, duration=1440, container='matroska,webm', "
+                        "streams=? WHERE id=?", (json.dumps(hevc), e["id"]))
+    conv = get_json(env, f"/api/items/{s1[0]['id']}/playback")["convert"]
+    assert conv["files"] == 2 and conv["folder"].endswith("Season 01")
+    assert conv["folder_command"].splitlines()[0] == conv["file_command"]
+    assert "libx264" in conv["file_command"]
+    # Plays without a video transcode in a browser that decodes 10-bit HEVC.
+    assert get_json(env, f"/api/items/{s1[0]['id']}/playback?vcaps=hevc,hevc10")["convert"] is None
+    assert get_json(env, f"/api/items/{s1[0]['id']}/playback?force=transcode")["convert"] is None
+    env["cfg"].hwaccel = "vaapi"
+    assert get_json(env, f"/api/items/{s1[0]['id']}/playback")["convert"] is None

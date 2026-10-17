@@ -1,5 +1,7 @@
+import shlex
+
 from mediawatcher.config import Config
-from mediawatcher.playback import Caps, decide, ffmpeg_args, pick_audio
+from mediawatcher.playback import Caps, convert_command, decide, ffmpeg_args, pick_audio
 
 JA = ["jpn", "ja", "japanese"]
 
@@ -144,3 +146,25 @@ def test_x264_threads_and_lookahead_are_capped():
     assert args[args.index("-rc-lookahead") + 1] == "10"
     args = ffmpeg_args(cfg(transcode_threads=0), it, decide(it, Caps(), JA))
     assert "-threads" not in args
+
+
+def test_convert_command_keeps_tracks_and_replaces_mkv_in_place():
+    it = item(path="/m/Show/It's E01.mkv",
+              streams=[a(0, codec="flac"), v("hevc", pix="yuv420p10le", index=1), a(2)])
+    d = decide(it, Caps(), JA)
+    assert d.mode == "transcode"
+    enc, mv = convert_command(it, d).split(" && ")
+    args = shlex.split(enc)
+    assert args[args.index("-i") + 1] == "It's E01.mkv"
+    assert [args[i + 1] for i, x in enumerate(args) if x == "-map"] == ["0:1", "0:a?", "0:s?", "0:t?"]
+    assert "libx264" in args and "format=yuv420p" in args and "zscale" not in enc
+    assert args[-1] == "It's E01.mkv.part"
+    assert shlex.split(mv) == ["mv", "--", "It's E01.mkv.part", "It's E01.mkv"]
+
+
+def test_convert_command_tonemaps_hdr_and_renames_other_containers():
+    it = item(path="/m/x.mp4", container="mov,mp4",
+              streams=[v("hevc", pix="yuv420p10le", color_transfer="smpte2084"), a(1)])
+    cmd = convert_command(it, decide(it, Caps(), JA))
+    assert "tonemap=" in cmd and "0:s?" not in cmd
+    assert cmd.endswith("mv -- x.mkv.part x.mkv")
