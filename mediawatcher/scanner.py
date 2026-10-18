@@ -11,7 +11,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
-from . import naming, probe
+from . import naming, probe, shutdown
 from .config import Config, Library
 from .db import Database, item_id, series_id
 from .images import POSTER_NAMES, Images, find_image
@@ -369,6 +369,8 @@ class Scanner:
         try:
             info = probe.probe(self.cfg.ffprobe, path)
         except Exception as e:  # noqa: BLE001 - recorded on the item
+            if shutdown.stopping.is_set():
+                return False  # ffprobe was killed with us; probe it again next start
             self.db.write("UPDATE items SET probed=2, probe_error=? WHERE id=?", (str(e)[:500], iid))
             return False
         self.db.write(
@@ -389,6 +391,8 @@ class Scanner:
             return
 
         def work(r):
+            if shutdown.stopping.is_set():
+                return  # left at probed=0, picked up by the scan on next start
             self.probe_item(r["id"], r["path"])
             self.status["probed"] += 1
 
@@ -398,9 +402,13 @@ class Scanner:
     def pregenerate_images(self) -> None:
         """Warm the image cache so the first library visit is instant."""
         for r in self.db.query("SELECT id FROM series ORDER BY sort_name"):
+            if shutdown.stopping.is_set():
+                return
             if not os.path.exists(self.images.cache_path("series", r["id"])):
                 self.images.series_image(r["id"])
         for r in self.db.query("SELECT id FROM items ORDER BY added_at DESC"):
+            if shutdown.stopping.is_set():
+                return
             if not os.path.exists(self.images.cache_path("item", r["id"])) \
                     and not self.images.failed("item", r["id"]):
                 self.images.item_image(r["id"])

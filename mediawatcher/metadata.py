@@ -28,6 +28,7 @@ import urllib.parse
 import unicodedata
 import urllib.request
 
+from . import shutdown
 from .config import Config
 from .db import Database
 from .images import Images
@@ -332,6 +333,8 @@ class Metadata:
         if status is not None:
             status.update(to_fetch=len(todo), fetched=0)
         for kind, id_, title, year, tags, query, old in todo:
+            if shutdown.stopping.is_set():
+                return  # the rest is still due, so the next scan fetches it
             try:
                 self.update_one(kind, id_, title, year, tags, query, old)
             except MetadataError as e:

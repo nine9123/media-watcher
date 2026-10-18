@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import os
 
-from . import config
+from . import config, shutdown
 from .db import Database
 from .images import Images
 from .metadata import Metadata, sources
@@ -14,6 +14,7 @@ from .server import App, make_server
 
 
 def main() -> None:
+    shutdown.install()
     logging.basicConfig(
         level=os.environ.get("LOG_LEVEL", "INFO").upper(),
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -33,12 +34,18 @@ def main() -> None:
         log.info("TMDB skipped: set TMDB_API_KEY")
     scanner = Scanner(cfg, db, images, metadata)
     scanner.start()
-    server = make_server(App(cfg, db, images, scanner))
+    app = App(cfg, db, images, scanner)
+    server = make_server(app)
     log.info("listening on http://%s:%d", cfg.host, cfg.port)
     try:
         server.serve_forever(poll_interval=1.0)
-    except KeyboardInterrupt:
-        pass
+    finally:
+        # Open streams are ffmpeg children; don't leave them behind.
+        with app.streams_lock:
+            procs = list(app.streams.values())
+        for proc in procs:
+            if proc.poll() is None:
+                proc.kill()
 
 
 if __name__ == "__main__":

@@ -12,6 +12,7 @@ import os
 import subprocess
 import threading
 
+from . import shutdown
 from .config import Config
 from .db import Database
 
@@ -152,7 +153,9 @@ class Images:
                     return out
             if self._frame(row["path"], row["duration"], out):
                 return out
-            if os.path.exists(source):  # not for a share that is briefly unmounted
+            # Not for a share that is briefly unmounted, nor for an ffmpeg
+            # killed because we are shutting down.
+            if os.path.exists(source) and not shutdown.stopping.is_set():
                 with open(failed, "wb"):
                     pass
         return None
