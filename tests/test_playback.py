@@ -1,8 +1,8 @@
 import shlex
 
 from mediawatcher.config import Config
-from mediawatcher.playback import (Caps, convert_command, decide, ffmpeg_args, pick_audio,
-                                  stream_mime)
+from mediawatcher.playback import (Caps, convert_command, converted_args, decide, ffmpeg_args,
+                                  pick_audio, stream_mime)
 
 JA = ["jpn", "ja", "japanese"]
 
@@ -169,6 +169,29 @@ def test_convert_command_tonemaps_hdr_and_renames_other_containers():
     cmd = convert_command(it, decide(it, Caps(), JA))
     assert "tonemap=" in cmd and "0:s?" not in cmd
     assert cmd.endswith("mv -- x.mkv.part x.mkv")
+
+
+def test_converted_copy_puts_preferred_audio_first_and_plays_directly():
+    it = item(streams=[v("hevc", pix="yuv420p10le", height=2160), a(1, codec="ac3", lang="eng", channels=6),
+                       a(2, codec="flac", lang="jpn", channels=6), a(3, codec="aac", lang="fra")])
+    args = converted_args(cfg(), it, JA, "/c/x.mp4.part")
+    assert [args[i + 1] for i, x in enumerate(args) if x == "-map"] == ["0:0", "0:2", "0:1", "0:3"]
+    assert "-sn" in args and "libx264" in args
+    assert args[args.index("-vf") + 1] == "scale=-2:1080,format=yuv420p"
+    # The track a browser plays must be AAC; later ones only have to fit in MP4.
+    assert args[args.index("-c:a:0") + 1] == "aac" and args[args.index("-ac:a:0") + 1] == "2"
+    assert args[args.index("-c:a:1") + 1] == "copy" and args[args.index("-c:a:2") + 1] == "copy"
+    assert args[args.index("-disposition:a:0") + 1] == "default"
+    assert args[args.index("-disposition:a:1") + 1] == "0"
+    assert "+faststart" in args and args[-3:] == ["-f", "mp4", "/c/x.mp4.part"]
+    assert "-map_chapters" not in args  # chapters drive skip intro
+
+
+def test_converted_copy_tonemaps_hdr():
+    it = item(streams=[v("hevc", pix="yuv420p10le", color_transfer="smpte2084"), a(1)])
+    args = converted_args(cfg(), it, JA, "/c/x.mp4.part")
+    assert "tonemap=" in args[args.index("-vf") + 1]
+    assert args[args.index("-c:a:0") + 1] == "copy"
 
 
 def test_stream_mime_names_the_codecs_ffmpeg_writes():

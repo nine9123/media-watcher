@@ -6,6 +6,7 @@ import logging
 import os
 
 from . import config, shutdown
+from .converter import Converter
 from .db import Database
 from .images import Images
 from .metadata import Metadata, sources
@@ -34,7 +35,11 @@ def main() -> None:
         log.info("TMDB skipped: set TMDB_API_KEY")
     scanner = Scanner(cfg, db, images, metadata)
     scanner.start()
-    app = App(cfg, db, images, scanner)
+    converter = Converter(cfg)
+    converter.start()
+    log.info("auto-convert: %s (cache %g GB, %g days)", "on" if cfg.auto_convert else "off",
+             cfg.convert_cache_gb, cfg.convert_cache_days)
+    app = App(cfg, db, images, scanner, converter)
     server = make_server(app)
     log.info("listening on http://%s:%d", cfg.host, cfg.port)
     try:

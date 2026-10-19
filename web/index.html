@@ -17,6 +17,7 @@
   </form>
   <button id="scan-btn" class="ghost" title="Rescan libraries">⟳</button>
   <a id="scan-status"></a>
+  <a id="conv-status" href="#/conversions" title="Conversions" hidden></a>
 </header>
 <main id="view"></main>
 
@@ -39,6 +40,24 @@
     <button id="p-convert-btn" class="ghost" title="This file needs a CPU transcode – how to convert it" hidden>⚠ Convert</button>
   </div>
   <div id="p-convert" hidden>
+    <div id="p-conv-auto" hidden>
+      <h2>Converted copy</h2>
+      <p id="p-conv-state"></p>
+      <div class="progress" id="p-conv-progress"><i id="p-conv-bar"></i></div>
+      <p class="dim">The server converts this file once to 8-bit H.264 in MP4, one file at a time,
+        and plays that copy directly from then on. Copies are kept for <span id="p-conv-days"></span> days
+        after they were last played, and the oldest go first when the cache passes
+        <span id="p-conv-gb"></span> GB. To keep it for good, download it and put it in place of the
+        original (subtitles are not included; a new file name also means new watch progress).</p>
+      <div class="row left">
+        <button id="p-conv-switch" hidden>Play converted copy</button>
+        <a id="p-conv-dl" class="btn secondary" hidden>Download .mp4</a>
+        <button id="p-conv-start" class="secondary" hidden>Convert now</button>
+        <button id="p-conv-cancel" class="ghost" hidden>Cancel conversion</button>
+        <a href="#/conversions" class="btn ghost">All conversions</a>
+      </div>
+    </div>
+    <div id="p-convert-manual">
     <h2>Convert to avoid transcoding</h2>
     <p>Your browser cannot decode this video (<span id="p-convert-reason"></span>), so every play
       re-encodes it on the server's CPU. Converting it once to 8-bit H.264 makes it play with a
@@ -54,6 +73,7 @@
       <h3>All <span id="p-convert-count"></span> files in this folder that need it</h3>
       <pre id="p-convert-folder-cmd"></pre>
       <button data-copy="p-convert-folder-cmd">Copy</button>
+    </div>
     </div>
     <div class="row"><button id="p-convert-close" class="ghost">Close</button></div>
   </div>

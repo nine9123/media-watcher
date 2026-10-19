@@ -313,6 +313,65 @@ def convert_command(item: dict, d: Decision) -> str:
     return shlex.join(args) + " && mv -- " + shlex.join([dst + ".part", dst])
 
 
+COPY_AUDIO_FIRST = {"aac", "mp3"}  # the track browsers play from the converted copy
+COPY_AUDIO_OTHER = {"aac", "mp3", "ac3", "eac3"}  # further tracks: anything MP4 holds
+
+
+def converted_audio_order(streams: list[dict], langs: list[str]) -> list[dict]:
+    """Audio tracks of a converted copy: the preferred one first, so a browser
+    playing the file directly gets it, then the rest in file order."""
+    first = pick_audio(streams, langs)
+    if first is None:
+        return []
+    return [first] + [a for a in audio_streams(streams) if a is not first]
+
+
+def converted_args(cfg: Config, item: dict, langs: list[str], out: str) -> list[str]:
+    """ffmpeg command writing a browser-playable MP4 copy of `item` to `out`.
+
+    8-bit H.264 (scaled to MAX_HEIGHT, HDR tone-mapped) with every audio
+    track, preferred language first, and faststart so the copy is served
+    with byte ranges like any direct-play file. Chapters (skip intro) are
+    kept; subtitles are not, MP4 cannot carry the usual ASS/PGS ones.
+    Progress is written to stdout as `key=value` lines.
+    """
+    streams = item.get("streams") or []
+    video = next((s for s in streams if s.get("type") == "video"), None)
+    if video is None:
+        raise ValueError("no video stream")
+    audios = converted_audio_order(streams, langs)
+
+    args = [cfg.ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", "-nostats",
+            "-progress", "pipe:1", "-y", "-i", item["path"], "-map", f"0:{video['index']}"]
+    for a in audios:
+        args += ["-map", f"0:{a['index']}"]
+    args += ["-sn", "-dn"]
+
+    filters = []
+    h = _target_height(cfg, video.get("height"))
+    if h:
+        filters.append(f"scale=-2:{h}")
+    if video.get("color_transfer") in HDR_TRANSFERS:
+        filters.append(TONEMAP)
+    filters.append("format=yuv420p")
+    args += ["-vf", ",".join(filters), "-c:v", "libx264", "-preset", cfg.x264_preset,
+             "-crf", str(cfg.video_crf), "-profile:v", "high", "-rc-lookahead", "10"]
+    if cfg.transcode_threads:
+        args += ["-threads", str(cfg.transcode_threads)]
+
+    for n, a in enumerate(audios):
+        if a.get("codec") in (COPY_AUDIO_FIRST if n == 0 else COPY_AUDIO_OTHER):
+            args += [f"-c:a:{n}", "copy"]
+        else:
+            ch = max(1, min(a.get("channels") or 2, cfg.audio_channels))
+            args += [f"-c:a:{n}", "aac", f"-b:a:{n}", "192k" if ch <= 2 else "448k",
+                     f"-ac:a:{n}", str(ch)]
+        args += [f"-disposition:a:{n}", "default" if n == 0 else "0"]
+
+    args += ["-max_muxing_queue_size", "4096", "-movflags", "+faststart", "-f", "mp4", out]
+    return args
+
+
 def describe_audio(streams: list[dict]) -> list[dict]:
     out = []
     for s in audio_streams(streams):

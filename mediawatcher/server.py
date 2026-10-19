@@ -25,6 +25,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import playback, probe
 from .config import Config
+from .converter import Converter
 from .db import Database
 from .images import Images
 from .scanner import Scanner
@@ -49,11 +50,13 @@ class HttpError(Exception):
 class App:
     """Everything the request handler needs, shared across threads."""
 
-    def __init__(self, cfg: Config, db: Database, images: Images, scanner: Scanner):
+    def __init__(self, cfg: Config, db: Database, images: Images, scanner: Scanner,
+                 converter: Converter | None = None):
         self.cfg = cfg
         self.db = db
         self.images = images
         self.scanner = scanner
+        self.converter = converter or Converter(cfg)
         self.session_token = hmac.new(cfg.api_key.encode(), b"mediawatcher-session",
                                       hashlib.sha256).hexdigest()
         self.streams: dict[str, subprocess.Popen] = {}
@@ -329,13 +332,31 @@ class App:
             chosen = playback.pick_audio(same, [alang])
             audio_index = chosen["index"] if chosen else None
         d = playback.decide(item, caps, self.cfg.audio_languages, audio_index, force)
+        convert = self.convert_hint(r, item, d, caps) if d.mode == "transcode" \
+            and force != "transcode" and self.cfg.hwaccel == "none" else None
+
+        # A file this browser can only get through a CPU transcode: use the
+        # converted copy if there is one, otherwise have one made (once).
+        conversion, use_copy = None, False
+        if d.mode == "transcode" and force != "transcode":
+            if self.cfg.auto_convert:
+                conversion = self.converter.request(iid, item, display_title(r))
+            else:
+                conversion = self.converter.status(iid, r["path"])
+            if conversion and conversion["state"] == "done" and \
+                    d.audio_index in (None, conversion["audio_index"]):
+                self.converter.touch(iid)
+                use_copy = True
+                d = playback.Decision("direct", d.video_index, d.audio_index, "copy",
+                                      "none" if d.audio_index is None else "copy",
+                                      "converted copy (cached)")
 
         t_raw = _q(query, "t")
         start = float(t_raw) if t_raw not in (None, "") else self.resume_point(r)
         if r["duration"]:
             start = min(max(0.0, start), max(0.0, r["duration"] - 1))
         if d.mode == "direct":
-            url = f"/file/{iid}"
+            url = f"/converted/{iid}" if use_copy else f"/file/{iid}"
         else:
             if start > 0 and d.video == "copy":
                 kf = probe.keyframe_before(self.cfg.ffprobe, r["path"], start,
@@ -359,8 +380,9 @@ class App:
             "audio_index": d.audio_index, "prev_id": prev_id, "next_id": next_id,
             "next": self.item_json(nxt) if nxt else None,
             "skips": json.loads(r["skips"] or "[]"),
-            "convert": self.convert_hint(r, item, d, caps) if d.mode == "transcode"
-            and force != "transcode" and self.cfg.hwaccel == "none" else None,
+            "convert": convert,
+            "conversion": conversion,
+            "convert_cache": {"days": self.cfg.convert_cache_days, "gb": self.cfg.convert_cache_gb},
         }
 
     def convert_hint(self, r, item: dict, d: playback.Decision, caps: playback.Caps) -> dict:
@@ -403,6 +425,16 @@ class App:
             proc = self.streams.pop(sid, None)
         if proc is not None and proc.poll() is None:
             proc.kill()
+
+
+def display_title(r) -> str:
+    """"Show S01E02 · Title" or "Movie (1995)", for the conversions list."""
+    if r["series_title"]:
+        ep = ""
+        if r["episode"] is not None:
+            ep = ("SP" if r["season"] == 0 else f"S{r['season'] or 0:02d}") + f"E{r['episode']:02d}"
+        return " · ".join(x for x in (f"{r['series_title']} {ep}".strip(), r["title"]) if x)
+    return f"{r['title']} ({r['year']})" if r["year"] else r["title"]
 
 
 def _art_v(t: float | None) -> str | None:
@@ -585,7 +617,7 @@ class Handler(BaseHTTPRequestHandler):
     # ---- browsing --------------------------------------------------------
     @route("GET", r"/api/home")
     def api_home(self):
-        status = dict(self.app.scanner.status)
+        status = {**self.app.scanner.status, "converting": self.app.converter.summary()}
         tag = hashlib.sha1(json.dumps(status, sort_keys=True, default=str).encode()).hexdigest()[:8]
         self.send_view(lambda: {**self.app.home(), "status": status}, "-" + tag)
 
@@ -620,7 +652,7 @@ class Handler(BaseHTTPRequestHandler):
 
     @route("GET", r"/api/status")
     def api_status(self):
-        self.send_json(self.app.scanner.status)
+        self.send_json({**self.app.scanner.status, "converting": self.app.converter.summary()})
 
     @route("POST", r"/api/scan")
     def api_scan(self):
@@ -686,7 +718,10 @@ class Handler(BaseHTTPRequestHandler):
     def file(self, iid):
         """The original file with byte-range support: direct play, downloads, VLC/mpv."""
         r = self.app.get_item(iid)
-        path = r["path"]
+        self.send_file(r["path"], r["mtime"], os.path.basename(r["path"]))
+
+    def send_file(self, path: str, mtime: float, name: str):
+        """A file with byte ranges; ?download=1 saves it as `name`."""
         try:
             f = open(path, "rb")
         except OSError:
@@ -719,13 +754,13 @@ class Handler(BaseHTTPRequestHandler):
                              or "application/octet-stream")
             self.send_header("Accept-Ranges", "bytes")
             self.send_header("Content-Length", str(end - start + 1))
-            self.send_header("Last-Modified", email.utils.formatdate(r["mtime"], usegmt=True))
+            self.send_header("Last-Modified", email.utils.formatdate(mtime, usegmt=True))
             self.send_header("Cache-Control", "private, max-age=3600")
             if status == 206:
                 self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
             if _q(self.query, "download"):
-                name = urllib.parse.quote(os.path.basename(path))
-                self.send_header("Content-Disposition", f"attachment; filename*=UTF-8''{name}")
+                quoted = urllib.parse.quote(name)
+                self.send_header("Content-Disposition", f"attachment; filename*=UTF-8''{quoted}")
             self.end_headers()
             if self.command == "HEAD":
                 return
@@ -734,6 +769,47 @@ class Handler(BaseHTTPRequestHandler):
                 self.connection.sendfile(f, start, end - start + 1)
             finally:
                 self.connection.settimeout(self.timeout)  # back to idle keep-alive rules
+
+    @route("GET", r"/converted/([0-9a-f]+)")
+    def converted(self, iid):
+        """A finished conversion: played directly like /file, or downloaded."""
+        meta = self.app.converter.cached(iid)
+        if meta is None:
+            raise HttpError(404, "no converted copy")
+        # created_at, not the mtime: that moves every time the copy is played.
+        self.send_file(self.app.converter.path(iid), meta.get("created_at") or 0,
+                       meta.get("name") or f"{iid}.mp4")
+
+    # ---- conversions -------------------------------------------------------
+    @route("GET", r"/api/conversions")
+    def api_conversions(self):
+        self.send_json(self.app.converter.overview())
+
+    @route("GET", r"/api/conversions/([0-9a-f]+)")
+    def api_conversion(self, iid):
+        r = self.app.db.one("SELECT path FROM items WHERE id=?", (iid,))
+        self.send_json({"conversion": self.app.converter.status(iid, r["path"] if r else None)})
+
+    @route("POST", r"/api/items/([0-9a-f]+)/convert")
+    def api_convert(self, iid):
+        """Start a conversion by hand (AUTO_CONVERT off), or retry a failed one."""
+        r = self.app.ensure_probed(self.app.get_item(iid))
+        item = dict(r)
+        item["streams"] = json.loads(r["streams"] or "[]")
+        if not any(s.get("type") == "video" for s in item["streams"]):
+            raise HttpError(400, "no video stream to convert")
+        self.send_json({"conversion": self.app.converter.request(
+            iid, item, display_title(r), retry=True)})
+
+    @route("POST", r"/api/conversions/([0-9a-f]+)/cancel")
+    def api_conversion_cancel(self, iid):
+        self.app.converter.cancel(iid)
+        self.send_json({"ok": True})
+
+    @route("POST", r"/api/conversions/([0-9a-f]+)/delete")
+    def api_conversion_delete(self, iid):
+        self.app.converter.delete(iid)
+        self.send_json({"ok": True})
 
     @route("GET", r"/stream/([0-9a-f]+)")
     def stream(self, iid):
