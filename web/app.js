@@ -300,7 +300,31 @@ function restoreScroll() {
 
 // ------------------------------------------------------------ router ---
 let currentRoute = null;
+// How many entries of this app lie behind the current one in the tab's
+// history. Kept in history.state, so it survives reloads and back/forward.
+// At 0 the entry behind is another site, a wake-up page or nothing at all,
+// and history.back() would not land on a view of this app.
+let depth = 0;
+function stampDepth() {
+  const s = history.state;
+  if (s && typeof s.depth === "number") { depth = s.depth; return; }
+  depth = currentRoute === null ? 0 : depth + 1;
+  history.replaceState({ ...(s || {}), depth }, "");
+}
+// Show another route in place of the current entry (no new history entry).
+function replaceRoute(hash) {
+  history.replaceState(history.state, "", hash);
+  route();
+}
+// Leave the current view the way the browser's back button would, or, when
+// there is no view of this app to go back to, replace it with `fallback`.
+function goBack(fallback = "#/") {
+  if (depth > 0) history.back();
+  else replaceRoute(fallback);
+}
+
 function route() {
+  stampDepth();
   const hash = location.hash.replace(/^#/, "") || "/";
   const [path, qs] = hash.split("?");
   if (currentRoute && !currentRoute.startsWith("/play/")) scrolls.set(currentRoute, window.scrollY);
@@ -674,7 +698,7 @@ const Player = {
     this.info.done = true;  // every later report of this item says "watched"
     this.report(true);
     if (this.info.next_id) this.go(this.info.next_id);
-    else history.back();
+    else this.exit();
   },
 
   seek(t) {
@@ -709,7 +733,7 @@ const Player = {
       return;
     }
     this.report(true);
-    if (!this.info.next_id) { history.back(); return; }
+    if (!this.info.next_id) { this.exit(); return; }
     const total = 8;
     let left = total;
     const it = this.info;
@@ -735,7 +759,13 @@ const Player = {
   },
 
   go(id) {
-    if (id) location.replace("#/play/" + id);
+    if (id) replaceRoute("#/play/" + id);
+  },
+
+  // Back to where the player was opened from; for a deep link, the episode's series.
+  exit() {
+    const sid = this.info ? this.info.item.series_id : this.seriesHint;
+    goBack(sid ? "#/series/" + sid : "#/");
   },
 
   // Show the controls, hide them again after a few idle seconds.
@@ -780,7 +810,7 @@ video.addEventListener("volumechange", () => {
 setInterval(() => { if (Player.active && !video.paused) Player.report(); }, 10000);
 
 $("#p-play").onclick = () => Player.togglePlay();
-$("#p-back").onclick = () => (history.length > 1 ? history.back() : (location.hash = "#/"));
+$("#p-back").onclick = () => Player.exit();
 $("#p-next").onclick = () => { Player.report(); Player.go(Player.info && Player.info.next_id); };
 $("#p-prev").onclick = () => { Player.report(); Player.go(Player.info && Player.info.prev_id); };
 $("#p-fs").onclick = () => Player.toggleFullscreen();
