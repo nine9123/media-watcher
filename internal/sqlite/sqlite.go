@@ -139,10 +139,16 @@ func varint(b []byte) (int64, int) {
 }
 
 // walk calls fn with the payload of every row of the table b-tree at root.
-func (db *DB) walk(root uint32, fn func(payload []byte) error, depth int) error {
+// seen holds the pages already visited: a damaged file whose child pointers
+// loop back must fail, not recurse (almost) forever.
+func (db *DB) walk(root uint32, fn func(payload []byte) error, depth int, seen map[uint32]bool) error {
 	if depth > 64 {
 		return errors.New("b-tree too deep")
 	}
+	if seen[root] {
+		return fmt.Errorf("page %d is in the b-tree twice", root)
+	}
+	seen[root] = true
 	p, err := db.page(root)
 	if err != nil {
 		return err
@@ -156,22 +162,49 @@ func (db *DB) walk(root uint32, fn func(payload []byte) error, depth int) error 
 	}
 	kind := p[h]
 	cells := int(binary.BigEndian.Uint16(p[h+3 : h+5]))
+	hdr := 8
+	if kind == 0x05 {
+		hdr = 12
+	}
+	if h+hdr+2*cells > len(p) {
+		return fmt.Errorf("page %d: cell count beyond page", root)
+	}
+	// cell returns the offset of cell i, checked to leave at least min bytes.
+	cell := func(i, min int) (int, error) {
+		ptr := int(binary.BigEndian.Uint16(p[h+hdr+2*i:]))
+		if ptr+min > len(p) {
+			return 0, fmt.Errorf("page %d: cell beyond page", root)
+		}
+		return ptr, nil
+	}
 	switch kind {
 	case 0x05: // interior table page
 		for i := 0; i < cells; i++ {
-			ptr := int(binary.BigEndian.Uint16(p[h+12+2*i:]))
-			if err := db.walk(binary.BigEndian.Uint32(p[ptr:]), fn, depth+1); err != nil {
+			ptr, err := cell(i, 4)
+			if err != nil {
+				return err
+			}
+			if err := db.walk(binary.BigEndian.Uint32(p[ptr:]), fn, depth+1, seen); err != nil {
 				return err
 			}
 		}
-		return db.walk(binary.BigEndian.Uint32(p[h+8:h+12]), fn, depth+1)
+		return db.walk(binary.BigEndian.Uint32(p[h+8:h+12]), fn, depth+1, seen)
 	case 0x0d: // leaf table page
 		for i := 0; i < cells; i++ {
-			ptr := int(binary.BigEndian.Uint16(p[h+8+2*i:]))
+			ptr, err := cell(i, 1)
+			if err != nil {
+				return err
+			}
 			size, n := varint(p[ptr:])
 			ptr += n
+			if ptr >= len(p) {
+				return fmt.Errorf("page %d: cell beyond page", root)
+			}
 			_, n = varint(p[ptr:]) // rowid
 			ptr += n
+			if size < 0 || size > int64(len(db.data))+int64(len(db.wal))*int64(db.pageSize) {
+				return fmt.Errorf("page %d: bad payload size %d", root, size)
+			}
 			payload, err := db.payload(p, ptr, int(size))
 			if err != nil {
 				return err
@@ -302,7 +335,7 @@ func (db *DB) Table(name string) ([]Row, error) {
 			sql, _ = r[4].(string)
 		}
 		return nil
-	}, 0)
+	}, 0, map[uint32]bool{})
 	if err != nil {
 		return nil, err
 	}
@@ -326,7 +359,7 @@ func (db *DB) Table(name string) ([]Row, error) {
 		}
 		rows = append(rows, row)
 		return nil
-	}, 0)
+	}, 0, map[uint32]bool{})
 	return rows, err
 }
 

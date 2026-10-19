@@ -334,6 +334,20 @@ func TestProgressSurvivesCacheWipe(t *testing.T) {
 	db2.View(func(d *store.Data) { same(t, d.Progress[mid].Position, 600) })
 }
 
+func TestProgressRejectsNonFinite(t *testing.T) {
+	e := newEnv(t)
+	mid := e.movieID()
+	for _, v := range []string{"nan", "NaN", "inf", "-Inf"} {
+		resp, _ := e.req("POST", "/api/items/"+mid+"/progress", obj{"position": v}, nil, true)
+		same(t, resp.StatusCode, 400)
+		resp, _ = e.req("POST", "/api/items/"+mid+"/progress", obj{"position": 60, "duration": v}, nil, true)
+		same(t, resp.StatusCode, 400)
+	}
+	// Nothing unencodable got in: the views still render.
+	same(t, len(list(e.get("/api/libraries/Movies")["movies"])), 1)
+	e.get("/api/home")
+}
+
 func TestByteRanges(t *testing.T) {
 	e := newEnv(t)
 	mid := e.movieID()

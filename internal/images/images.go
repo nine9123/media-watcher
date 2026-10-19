@@ -180,6 +180,12 @@ func (im *Images) ItemImage(id string) string {
 	}
 	out, failed := im.CachePath("item", id), im.FailedPath("item", id)
 	image := it.Image
+	if image != "" && !exists(image) {
+		// A sidecar deleted since the last scan: judge freshness and failure
+		// by what is used instead, or a failed frame grab is retried on
+		// every request.
+		image = ""
+	}
 	if image == "" && it.Kind == "movie" {
 		image = im.metaPoster(id)
 	}

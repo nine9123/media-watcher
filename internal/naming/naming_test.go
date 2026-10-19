@@ -85,6 +85,13 @@ func TestMultiEpisode(t *testing.T) {
 	eq(t, tup{iv(r.Episode), iv(r.EpisodeEnd)}, tup{1, 2})
 	r = ep(t, "Show/Season 1/Show S01E03E04.mkv", "auto", 1)
 	eq(t, tup{iv(r.Episode), iv(r.EpisodeEnd)}, tup{3, 4})
+	r = ep(t, "Show/Season 1/Show - S01E05-06 - Title.mkv", "auto", 1)
+	eq(t, tup{iv(r.Episode), iv(r.EpisodeEnd), r.Title}, tup{5, 6, "Title"})
+	// A resolution after a dash is not the end of a range.
+	r = ep(t, "Show/Show.S01E01-1080p.mkv", "auto", 1)
+	eq(t, tup{iv(r.Episode), iv(r.EpisodeEnd), r.Title}, tup{1, nil, ""})
+	r = ep(t, "Show/Show S01E05-720p.WEB.mkv", "auto", 1)
+	eq(t, tup{iv(r.Episode), iv(r.EpisodeEnd), r.Title}, tup{5, nil, ""})
 }
 
 func TestFansubStyle(t *testing.T) {

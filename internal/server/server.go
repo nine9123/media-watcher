@@ -422,10 +422,17 @@ func toFloat(v any) (float64, bool) {
 		}
 		return 0, true
 	case string:
-		f, err := strconv.ParseFloat(strings.TrimSpace(x), 64)
-		return f, err == nil
+		return parseFinite(strings.TrimSpace(x))
 	}
 	return 0, false
+}
+
+// parseFinite is strconv.ParseFloat without NaN and ±Inf, which
+// encoding/json cannot write: one in the progress log or a view would fail
+// every later save or response that includes it.
+func parseFinite(s string) (float64, bool) {
+	f, err := strconv.ParseFloat(s, 64)
+	return f, err == nil && !math.IsNaN(f) && !math.IsInf(f, 0)
 }
 
 // truthy is Python's bool() for a decoded JSON value.
@@ -930,8 +937,8 @@ func (a *App) playbackInfo(id string, rq *request) (*playbackJSON, error) {
 
 	var start float64
 	if t := rq.q("t"); t != "" {
-		f, err := strconv.ParseFloat(t, 64)
-		if err != nil {
+		f, ok := parseFinite(t)
+		if !ok {
 			return nil, fail(400, "bad t")
 		}
 		start = f
@@ -1082,8 +1089,8 @@ func (a *App) stream(rq *request) error {
 	d := playback.Decide(m, caps, a.Cfg.AudioLanguages, audioIndex, force)
 	start := 0.0
 	if t := rq.q("t"); t != "" {
-		f, err := strconv.ParseFloat(t, 64)
-		if err != nil {
+		f, ok := parseFinite(t)
+		if !ok {
 			return fail(400, "bad t")
 		}
 		start = max(0, f)

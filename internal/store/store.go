@@ -226,7 +226,18 @@ func (s *Store) SetProgress(recs ...Progress) error {
 	s.mu.Unlock()
 
 	if s.logFile == nil {
-		return errors.New("store is closed")
+		select {
+		case <-s.stop:
+			return errors.New("store is closed")
+		default:
+		}
+		// The reopen after a compaction failed: try again rather than
+		// keep every later change in memory only.
+		f, err := os.OpenFile(s.progressPath, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o644)
+		if err != nil {
+			return fmt.Errorf("opening %s: %w", s.progressPath, err)
+		}
+		s.logFile = f
 	}
 	if _, err := s.logFile.Write(buf.Bytes()); err != nil {
 		return fmt.Errorf("writing %s: %w", s.progressPath, err)
@@ -373,7 +384,16 @@ func writeAtomic(path string, data []byte) error {
 		os.Remove(tmp)
 		return err
 	}
-	return os.Rename(tmp, path)
+	if err := os.Rename(tmp, path); err != nil {
+		return err
+	}
+	// Make the rename itself durable: after a power cut the old file must
+	// not come back while later appends went to the new one.
+	if d, err := os.Open(filepath.Dir(path)); err == nil {
+		d.Sync()
+		d.Close()
+	}
+	return nil
 }
 
 // ---- progress.jsonl ---------------------------------------------------------
@@ -382,17 +402,6 @@ func (s *Store) loadProgress(legacy string) error {
 	f, err := os.Open(s.progressPath)
 	switch {
 	case errors.Is(err, os.ErrNotExist):
-		if _, err := os.Stat(legacy); err == nil {
-			n, err := importProgress(legacy, s.data.Progress)
-			if err != nil {
-				// Watch progress is the one thing worth keeping: don't start
-				// over silently and then overwrite nothing, but don't refuse
-				// to run either. The old file stays where it is.
-				log.Errorf("cannot import watch progress from %s: %v", legacy, err)
-			} else {
-				log.Infof("imported watch progress of %d items from %s", n, legacy)
-			}
-		}
 	case err != nil:
 		return err
 	default:
@@ -411,9 +420,41 @@ func (s *Store) loadProgress(legacy string) error {
 			return err
 		}
 	}
+	// The import is done until it has worked once (the marker file), not just
+	// until progress.jsonl exists: a failed one is tried again on the next
+	// start, and merged with whatever was watched in between.
+	marker := legacy + ".imported"
+	imported := false
+	if _, err := os.Stat(legacy); err == nil {
+		if _, err := os.Stat(marker); errors.Is(err, os.ErrNotExist) {
+			old := map[string]*Progress{}
+			if n, err := importProgress(legacy, old); err != nil {
+				// Watch progress is the one thing worth keeping: don't refuse
+				// to run, but don't give up on it either. The old file stays
+				// where it is.
+				log.Errorf("cannot import watch progress from %s, trying again on the next start: %v", legacy, err)
+			} else {
+				for id, p := range old {
+					if cur, ok := s.data.Progress[id]; !ok || cur.UpdatedAt < p.UpdatedAt {
+						s.data.Progress[id] = p
+					}
+				}
+				imported = true
+				log.Infof("imported watch progress of %d items from %s", n, legacy)
+			}
+		}
+	}
 	s.logMu.Lock()
 	defer s.logMu.Unlock()
-	return s.compactLocked()
+	if err := s.compactLocked(); err != nil {
+		return err
+	}
+	if imported {
+		if err := os.WriteFile(marker, nil, 0o644); err != nil {
+			log.Warnf("cannot write %s, the import runs again on the next start: %v", marker, err)
+		}
+	}
+	return nil
 }
 
 // compactLocked rewrites progress.jsonl with one line per item. Caller holds logMu.

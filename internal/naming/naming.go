@@ -141,6 +141,8 @@ func atoi(s string) int {
 
 func intp(n int) *int { return &n }
 
+func isASCIILetter(c byte) bool { return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' }
+
 func group(s string, m []int, i int) string {
 	if m[2*i] < 0 {
 		return ""
@@ -270,6 +272,11 @@ func optInt(s string) *int {
 // matchEpisode finds an episode marker.
 func matchEpisode(stem string) *found {
 	if m := sxxeyy.FindStringSubmatchIndex(stem); m != nil {
+		if m[8] >= 0 && m[9] < len(stem) && isASCIILetter(stem[m[9]]) {
+			// "S01E01-1080p", "S01E05-720p.WEB": a resolution, not a range end.
+			return &found{stem[:m[2]], intp(atoi(group(stem, m, 2))), intp(atoi(group(stem, m, 3))),
+				nil, stem[m[7]:]}
+		}
 		return &found{stem[:m[2]], intp(atoi(group(stem, m, 2))), intp(atoi(group(stem, m, 3))),
 			optInt(group(stem, m, 4)), stem[m[3]:]}
 	}

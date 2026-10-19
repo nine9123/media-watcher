@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/debug"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -186,12 +187,25 @@ type dirListing struct {
 // walkLibrary lists every directory under root. Unreadable directories are
 // skipped, not fatal: a NAS share with one broken folder must not take the
 // whole library down.
+//
+// Symlinked folders are followed, except one that leads back to a folder
+// the walk is already inside ("Show/link -> .."), which would never end.
 func walkLibrary(root string) []dirListing {
+	type dir struct {
+		rel  string
+		path []string // real paths of this folder and every folder above it
+	}
 	var out []dirListing
-	stack := []string{""}
+	realRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		realRoot = root
+	}
+	stack := []dir{{"", []string{realRoot}}}
 	for len(stack) > 0 {
-		rel := stack[len(stack)-1]
+		cur := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
+		rel := cur.rel
+		real := cur.path[len(cur.path)-1]
 		full := root
 		if rel != "" {
 			full = filepath.Join(root, rel)
@@ -202,24 +216,34 @@ func walkLibrary(root string) []dirListing {
 			continue
 		}
 		d := dirListing{rel: rel, listing: map[string]string{}}
-		var subdirs []string
+		var subdirs []dir
 		for _, e := range entries {
 			name := e.Name()
 			isDir := e.IsDir()
+			childReal := filepath.Join(real, name)
 			if e.Type()&os.ModeSymlink != 0 {
 				st, err := os.Stat(filepath.Join(full, name))
 				if err != nil {
 					continue
 				}
 				isDir = st.IsDir()
+				if isDir {
+					if childReal, err = filepath.EvalSymlinks(filepath.Join(full, name)); err != nil {
+						continue
+					}
+					if slices.Contains(cur.path, childReal) {
+						log.Warnf("not following %s: it leads back to %s", filepath.Join(full, name), childReal)
+						continue
+					}
+				}
 			}
 			if isDir {
 				if !naming.IsIgnoredDir(name) {
+					childRel := name
 					if rel != "" {
-						subdirs = append(subdirs, rel+"/"+name)
-					} else {
-						subdirs = append(subdirs, name)
+						childRel = rel + "/" + name
 					}
+					subdirs = append(subdirs, dir{childRel, append(cur.path[:len(cur.path):len(cur.path)], childReal)})
 				}
 				continue
 			}

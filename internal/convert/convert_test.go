@@ -171,3 +171,21 @@ func TestExpiredAndLeastRecentlyPlayedCopiesAreDropped(t *testing.T) {
 		t.Error(got)
 	}
 }
+
+func TestRestoredJobWithAFinishedCopyIsNotRedone(t *testing.T) {
+	// A restart between writing the copy and saving the queue.
+	dir := t.TempDir()
+	c := conv(t, dir)
+	c.noWorker = true
+	it := source(t, dir, "a.mkv")
+	fakeCopy(t, c, "a1", it, 10, now())
+	j := &job{id: "a1", file: "a.mkv", item: it, state: "running", startedAt: now()}
+	c.jobs["a1"] = j
+	c.run(j) // would fail: there is no ffmpeg
+	if len(c.jobs) != 0 || j.err != nil {
+		t.Errorf("jobs %v, err %v", c.jobs, j.err)
+	}
+	if c.Cached("a1", it.Path) == nil {
+		t.Error("the copy is gone")
+	}
+}

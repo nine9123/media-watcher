@@ -19,6 +19,7 @@ package metadata
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html"
 	"io"
@@ -183,6 +184,12 @@ func (t *Tmdb) get(path string, params url.Values, out any) (bool, error) {
 				return false, nil
 			}
 			return false, &Error{"tmdb", fmt.Sprintf("HTTP %d for %s", he.Code, path)}
+		}
+		// A *url.Error quotes the whole URL, api_key included, and this
+		// message ends up in the log and the scan status in the UI.
+		var ue *url.Error
+		if errors.As(err, &ue) {
+			err = ue.Err
 		}
 		return false, &Error{"tmdb", fmt.Sprintf("%s: %v", path, err)}
 	}
@@ -725,7 +732,7 @@ func (md *Metadata) updateOne(t target, query string, old *store.Meta) error {
 		if found.Title != nil {
 			title = *found.Title
 		}
-		log.Infof("metadata %s %q -> %s %d %q", t.kind, t.title, found.Source, *id, title)
+		log.Infof("metadata %s %q -> %s %s %q", t.kind, t.title, found.Source, optStr(id), title)
 	} else {
 		log.Infof("metadata %s %q: no match", t.kind, t.title)
 	}

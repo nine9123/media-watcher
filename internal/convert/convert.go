@@ -604,6 +604,12 @@ func (c *Converter) run(j *job) {
 		c.fail(j, "cannot read file: "+errText(err))
 		return
 	}
+	if c.Cached(j.id, src) != nil {
+		// Restored from queue.json after a restart that came between
+		// finishing the copy and saving the queue.
+		c.finish(j)
+		return
+	}
 	os.MkdirAll(c.Dir, 0o755)
 	c.makeRoom(min(st.Size(), c.maxBytes()), j.id)
 	part := c.Path(j.id) + ".part"
@@ -710,10 +716,8 @@ func (c *Converter) run(j *job) {
 		c.lastSpeed = fp(d / elapsed)
 		c.mu.Unlock()
 	}
-	if err := os.Rename(part, c.Path(j.id)); err != nil {
-		c.fail(j, err.Error())
-		return
-	}
+	// The metadata goes first: allCached deletes an .mp4 without one, and
+	// Cached ignores metadata without its .mp4.
 	stem, _ := naming.SplitExt(j.file)
 	m := Meta{Title: j.title, Name: stem + ".mp4", Source: src, SourceSize: st.Size(),
 		SourceMtime: st.ModTime().Unix(), Audio: []int{}, CreatedAt: fp(now())}
@@ -722,8 +726,33 @@ func (c *Converter) run(j *job) {
 	}
 	raw, _ := json.Marshal(m)
 	tmp := c.metaPath(j.id) + ".tmp"
-	if err := os.WriteFile(tmp, raw, 0o644); err == nil {
-		os.Rename(tmp, c.metaPath(j.id))
+	err = os.WriteFile(tmp, raw, 0o644)
+	if err == nil {
+		err = os.Rename(tmp, c.metaPath(j.id))
+	}
+	if err != nil {
+		os.Remove(tmp)
+		os.Remove(part)
+		c.fail(j, "cannot save the converted copy: "+err.Error())
+		return
+	}
+	// Published under c.mu, so a Cancel or Delete either comes first and
+	// is seen here, or comes after and removes the finished copy.
+	c.mu.Lock()
+	cancelled = j.cancelled
+	if !cancelled {
+		err = os.Rename(part, c.Path(j.id))
+	}
+	c.mu.Unlock()
+	if cancelled || err != nil {
+		os.Remove(part)
+		os.Remove(c.metaPath(j.id))
+		if err != nil {
+			c.fail(j, err.Error())
+		} else {
+			c.finish(j)
+		}
+		return
 	}
 	log.Infof("converted %s in %.0fs (%.1f MB)", src, elapsed, float64(pst.Size())/1e6)
 	c.finish(j)

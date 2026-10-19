@@ -172,3 +172,54 @@ func TestLibraryIsWrittenAndReloaded(t *testing.T) {
 		t.Error("expected an empty library")
 	}
 }
+
+func TestFailedProgressImportIsRetried(t *testing.T) {
+	dir := t.TempDir()
+	cache, config := filepath.Join(dir, "cache"), filepath.Join(dir, "config")
+	good, err := os.ReadFile(filepath.Join("testdata", "legacy", "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.MkdirAll(config, 0o755)
+	legacy := filepath.Join(config, "state.db")
+	os.WriteFile(legacy, good[:200], 0o644) // cut off: the import fails
+	s := open(t, cache, config)
+	if err := s.SetProgress(Progress{ID: "new", Position: 42, UpdatedAt: 1800000000}); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+
+	// Fixed by hand: the next start imports it, keeping what was watched since.
+	os.WriteFile(legacy, good, 0o644)
+	s2 := open(t, cache, config)
+	s2.View(func(d *Data) {
+		if len(d.Progress) < 2 || d.Progress["new"] == nil || d.Progress["new"].Position != 42 {
+			t.Errorf("%d rows, new=%+v", len(d.Progress), d.Progress["new"])
+		}
+	})
+	s2.Close()
+	if _, err := os.Stat(legacy + ".imported"); err != nil {
+		t.Error(err)
+	}
+}
+
+func TestMalformedSQLiteIsAnErrorNotAPanic(t *testing.T) {
+	good, err := os.ReadFile(filepath.Join("testdata", "legacy", "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, damage := range map[string]func(b []byte){
+		"cell count": func(b []byte) { b[103], b[104] = 0xff, 0xff },
+		"cell pointer": func(b []byte) {
+			b[108], b[109] = 0xff, 0xfe
+		},
+	} {
+		b := append([]byte(nil), good...)
+		damage(b)
+		p := filepath.Join(t.TempDir(), "state.db")
+		os.WriteFile(p, b, 0o644)
+		if _, err := importProgress(p, map[string]*Progress{}); err == nil {
+			t.Errorf("%s: no error", name)
+		}
+	}
+}

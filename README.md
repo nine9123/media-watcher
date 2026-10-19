@@ -74,7 +74,9 @@ or changing the host mount path keeps your watch progress.
 **Upgrading from the Python version.** Earlier images kept the same data in
 SQLite (`/cache/library.db`, `/config/state.db`). On its first start the Go
 version imports both, so watch progress, probe results and metadata carry
-over without a rescan, and existing logins stay valid. The old files are
+over without a rescan, and existing logins stay valid. A successful import
+of `state.db` is marked by `/config/state.db.imported`; if it fails, the
+error is logged and it is tried again on the next start. The old files are
 left in place but no longer updated: progress recorded after the switch is
 not seen by an older image.
 

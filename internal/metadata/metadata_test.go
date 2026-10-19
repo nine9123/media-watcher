@@ -411,6 +411,17 @@ func TestHTTPErrorIsATmdbError(t *testing.T) {
 	}
 }
 
+func TestNetworkErrorDoesNotQuoteTheAPIKey(t *testing.T) {
+	tm := &metadata.Tmdb{Key: "v3-secret-key", Fetch: func(u string, _ map[string]string, _ []byte) ([]byte, error) {
+		// What http.Client.Do returns when the network is down: it quotes u.
+		return nil, &url.Error{Op: "Get", URL: u, Err: errors.New("dial tcp: lookup api.themoviedb.org: no such host")}
+	}}
+	_, err := tm.Find("movie", "Heat", nil, nil)
+	if err == nil || strings.Contains(err.Error(), "v3-secret-key") || !strings.Contains(err.Error(), "no such host") {
+		t.Error(err)
+	}
+}
+
 func TestDownloadedPosterReplacesFrameGrab(t *testing.T) {
 	if _, err := exec.LookPath("ffmpeg"); err != nil {
 		t.Skip("needs ffmpeg")
