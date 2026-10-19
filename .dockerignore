@@ -1,7 +1,8 @@
 .git
 .env
-**/__pycache__
-.pytest_cache
-tests
+.claude-task
+docs
 cache
 config
+**/*_test.go
+**/testdata

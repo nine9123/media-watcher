@@ -185,3 +185,26 @@ The GIL convoy is still there, but requests now produce far fewer rows to
 be slow on, and memory stays flat. The Go recommendation stands if
 the library or the number of clients grows a lot. For one user, the Python
 version no longer has a problem you would notice.
+
+## Rewritten in Go (2026-10-19)
+
+The server is now Go, in the shape suggested above (`cmd/mediawatcher`,
+`internal/...`, `web/` embedded), with the same environment variables,
+HTTP API, item/series ids and session cookie. One deliberate difference:
+**no `modernc.org/sqlite`.** Adding a third-party dependency was left to a
+human decision, so the rewrite uses the standard library only:
+
+- The library index and watch progress live in memory behind one RWMutex
+  (a few MB for thousands of files) and are persisted as
+  `CACHE_DIR/library.json` (rewritten a few seconds after a change) and
+  `CONFIG_DIR/progress.jsonl` (one appended line per change, compacted on
+  start). The SQL views became plain Go over those maps.
+- `internal/sqlite` is a small read-only SQLite file reader (table b-trees,
+  overflow pages, committed WAL frames) used once, to import `library.db`
+  and `state.db` written by the Python version.
+
+If the store ever needs real SQL, `internal/store` is the only package to
+change. Running the Python and Go servers on the same synthetic library
+(700 files) gave identical JSON on every `/api/home`, `/api/libraries/*`,
+`/api/series/*`, `/api/search` and `/api/problems` response, both from a
+fresh scan and after importing the Python databases.

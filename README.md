@@ -23,7 +23,7 @@ AniList.
   the language you pick is remembered for the rest of that series.
 - **Never shows subtitles.** Subtitle streams are never sent to the browser,
   in any mode.
-- **Fast.** Standard-library Python + SQLite + ffmpeg, no framework. Library
+- **Fast.** One static Go binary (standard library only) + ffmpeg. Library
   pages are one small JSON request; posters/thumbnails are pre-generated and
   downscaled on the SSD so grids never pull full-size images over SMB.
 - **Watch progress.** Resume, continue watching, next up, auto-play next
@@ -65,11 +65,18 @@ no checkout to build from and no `.env`. The Gitea workflow in
 | Mount     | What                                              | Lose it?                                      |
 |-----------|---------------------------------------------------|-----------------------------------------------|
 | `/media`  | your library, mount **read-only**                 | –                                             |
-| `/cache`  | SQLite library index + thumbnails. Put it on SSD. | fine, rebuilt by the next scan                |
-| `/config` | `state.db` with watch progress (tiny)             | you lose watched/resume state                 |
+| `/cache`  | library index (`library.json`) + thumbnails. Put it on SSD. | fine, rebuilt by the next scan      |
+| `/config` | `progress.jsonl` with watch progress (tiny)       | you lose watched/resume state                 |
 
 Item ids are derived from the path inside the library, so wiping `/cache`
 or changing the host mount path keeps your watch progress.
+
+**Upgrading from the Python version.** Earlier images kept the same data in
+SQLite (`/cache/library.db`, `/config/state.db`). On its first start the Go
+version imports both, so watch progress, probe results and metadata carry
+over without a rescan, and existing logins stay valid. The old files are
+left in place but no longer updated: progress recorded after the switch is
+not seen by an older image.
 
 ### Libraries
 
@@ -195,7 +202,7 @@ was; the next scan tries again.
   source, and is stripped from the displayed title.
 - Series pages show the description under the title. Episodes keep their
   own names and frame thumbnails; only series and movies are looked up.
-- Everything lives in `/cache` (`library.db` and `metadata/`), so wiping
+- Everything lives in `/cache` (`library.json` and `metadata/`), so wiping
   the cache only costs one more round of lookups.
 
 This product uses the TMDB API but is not endorsed or certified by TMDB.
@@ -281,10 +288,14 @@ in the player URL (`#/play/<id>`).
 
 ## Development
 
-Standard library only; ffmpeg/ffprobe must be on `PATH` (or set `FFMPEG` /
-`FFPROBE`).
+Go 1.23, standard library only; ffmpeg/ffprobe must be on `PATH` (or set
+`FFMPEG` / `FFPROBE`). The web UI in `web/` is built into the binary; set
+`WEB_DIR=./web` to serve it from disk while editing it.
 
 ```sh
-API_KEY=devkey123 MEDIA_ROOT=./media CACHE_DIR=./cache CONFIG_DIR=./config python -m mediawatcher
-python -m pytest -q
+go build -o mediawatcher ./cmd/mediawatcher
+API_KEY=devkey123 MEDIA_ROOT=./media CACHE_DIR=./cache CONFIG_DIR=./config ./mediawatcher
+go test ./...
 ```
+
+Tests that need ffmpeg/ffprobe skip themselves when those are not installed.

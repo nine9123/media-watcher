@@ -1,9 +1,0 @@
-[project]
-name = "mediawatcher"
-version = "0.1.0"
-description = "Small, fast self-hosted media player for one user"
-requires-python = ">=3.11"
-dependencies = []
-
-[tool.pytest.ini_options]
-testpaths = ["tests"]
