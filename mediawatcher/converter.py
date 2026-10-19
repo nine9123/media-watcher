@@ -2,9 +2,10 @@
 
 A file that needs a CPU transcode costs a full encode on every play. The
 first time one is played it is queued here instead: one ffmpeg at a time,
-at low priority, writes an 8-bit H.264 MP4 (see playback.converted_args)
-into CACHE_DIR/converted. Once that exists the player uses it as a
-direct-play file, and it can be downloaded to replace the original.
+at low priority, writes an 8-bit H.264 MP4 at the source resolution with
+one audio track (see playback.converted_args) into CACHE_DIR/converted.
+Once that exists the player uses it as a direct-play file, and it can be
+downloaded to replace the original.
 
   * One job per item. Opening the same file again, from any browser, gets
     the job that is already queued or running, never a second one.
@@ -396,8 +397,8 @@ class Converter:
             self.last_speed = dur / elapsed
         os.replace(part, self.path(job.id))
         name = os.path.splitext(job.file)[0] + ".mp4"
-        audio = [a["index"] for a in playback.converted_audio_order(
-            job.item.get("streams") or [], self.cfg.audio_languages)]
+        a = playback.converted_audio(job.item.get("streams") or [], self.cfg.audio_languages)
+        audio = [a["index"]] if a else []
         meta = {"title": job.title, "name": name, "source": src, "source_size": st.st_size,
                 "source_mtime": int(st.st_mtime), "audio": audio, "created_at": time.time()}
         with open(self._meta_path(job.id) + ".tmp", "w") as f:

@@ -343,12 +343,15 @@ class App:
                 conversion = self.converter.request(iid, item, display_title(r))
             else:
                 conversion = self.converter.status(iid, r["path"])
+            # The copy has one audio track; a different one picked by hand
+            # (or remembered for the series) plays the original instead.
             if conversion and conversion["state"] == "done" and \
-                    d.audio_index in (None, conversion["audio_index"]):
+                    (audio_index is None or d.audio_index == conversion["audio_index"]):
                 self.converter.touch(iid)
                 use_copy = True
-                d = playback.Decision("direct", d.video_index, d.audio_index, "copy",
-                                      "none" if d.audio_index is None else "copy",
+                a_idx = conversion["audio_index"]
+                d = playback.Decision("direct", d.video_index, a_idx, "copy",
+                                      "none" if a_idx is None else "copy",
                                       "converted copy (cached)")
 
         t_raw = _q(query, "t")

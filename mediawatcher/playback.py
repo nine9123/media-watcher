@@ -313,60 +313,62 @@ def convert_command(item: dict, d: Decision) -> str:
     return shlex.join(args) + " && mv -- " + shlex.join([dst + ".part", dst])
 
 
-COPY_AUDIO_FIRST = {"aac", "mp3"}  # the track browsers play from the converted copy
-COPY_AUDIO_OTHER = {"aac", "mp3", "ac3", "eac3"}  # further tracks: anything MP4 holds
+COPY_AUDIO = {"aac", "mp3"}  # what browsers play from the converted copy as is
+ENGLISH = ["eng", "en", "english"]
+CONVERT_CRF = 18  # visually transparent; live transcodes use VIDEO_CRF
 
 
-def converted_audio_order(streams: list[dict], langs: list[str]) -> list[dict]:
-    """Audio tracks of a converted copy: the preferred one first, so a browser
-    playing the file directly gets it, then the rest in file order."""
-    first = pick_audio(streams, langs)
-    if first is None:
-        return []
-    return [first] + [a for a in audio_streams(streams) if a is not first]
+def converted_audio(streams: list[dict], langs: list[str]) -> dict | None:
+    """The one audio track of a converted copy: the preferred language
+    (AUDIO_LANGUAGES), else English, else whatever pick_audio would play."""
+    audios = audio_streams(streams)
+    for wanted in (langs, ENGLISH):
+        match = [s for s in audios if _lang_match(s, wanted)]
+        if match:
+            return pick_audio(match, wanted)
+    return pick_audio(streams, langs)
 
 
 def converted_args(cfg: Config, item: dict, langs: list[str], out: str) -> list[str]:
     """ffmpeg command writing a browser-playable MP4 copy of `item` to `out`.
 
-    8-bit H.264 (scaled to MAX_HEIGHT, HDR tone-mapped) with every audio
-    track, preferred language first, and faststart so the copy is served
-    with byte ranges like any direct-play file. Chapters (skip intro) are
-    kept; subtitles are not, MP4 cannot carry the usual ASS/PGS ones.
+    8-bit H.264 at the source resolution (HDR tone-mapped, CONVERT_CRF, not
+    the live MAX_HEIGHT/VIDEO_CRF) with a single audio track (see
+    converted_audio), and faststart so the copy is served with byte ranges
+    like any direct-play file. Chapters (skip intro) are kept; subtitles are
+    not, MP4 cannot carry the usual ASS/PGS ones.
     Progress is written to stdout as `key=value` lines.
     """
     streams = item.get("streams") or []
     video = next((s for s in streams if s.get("type") == "video"), None)
     if video is None:
         raise ValueError("no video stream")
-    audios = converted_audio_order(streams, langs)
+    audio = converted_audio(streams, langs)
 
     args = [cfg.ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", "-nostats",
             "-progress", "pipe:1", "-y", "-i", item["path"], "-map", f"0:{video['index']}"]
-    for a in audios:
-        args += ["-map", f"0:{a['index']}"]
+    if audio is not None:
+        args += ["-map", f"0:{audio['index']}"]
     args += ["-sn", "-dn"]
 
     filters = []
-    h = _target_height(cfg, video.get("height"))
-    if h:
-        filters.append(f"scale=-2:{h}")
     if video.get("color_transfer") in HDR_TRANSFERS:
         filters.append(TONEMAP)
     filters.append("format=yuv420p")
     args += ["-vf", ",".join(filters), "-c:v", "libx264", "-preset", cfg.x264_preset,
-             "-crf", str(cfg.video_crf), "-profile:v", "high", "-rc-lookahead", "10"]
+             "-crf", str(CONVERT_CRF), "-profile:v", "high", "-rc-lookahead", "10"]
     if cfg.transcode_threads:
         args += ["-threads", str(cfg.transcode_threads)]
 
-    for n, a in enumerate(audios):
-        if a.get("codec") in (COPY_AUDIO_FIRST if n == 0 else COPY_AUDIO_OTHER):
-            args += [f"-c:a:{n}", "copy"]
-        else:
-            ch = max(1, min(a.get("channels") or 2, cfg.audio_channels))
-            args += [f"-c:a:{n}", "aac", f"-b:a:{n}", "192k" if ch <= 2 else "448k",
-                     f"-ac:a:{n}", str(ch)]
-        args += [f"-disposition:a:{n}", "default" if n == 0 else "0"]
+    if audio is None:
+        args += ["-an"]
+    elif audio.get("codec") in COPY_AUDIO:
+        args += ["-c:a", "copy"]
+    else:
+        ch = max(1, min(audio.get("channels") or 2, cfg.audio_channels))
+        args += ["-c:a", "aac", "-b:a", "192k" if ch <= 2 else "448k", "-ac", str(ch)]
+    if audio is not None:
+        args += ["-disposition:a:0", "default"]
 
     args += ["-max_muxing_queue_size", "4096", "-movflags", "+faststart", "-f", "mp4", out]
     return args

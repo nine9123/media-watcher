@@ -221,9 +221,11 @@ match), so jumping around a two-hour movie is instant, not a long buffer.
 
 When the browser can only play a file through a CPU transcode (the
 **Transcode** badge), opening it also queues a conversion of that file to
-an MP4 with 8-bit H.264 video (scaled to `MAX_HEIGHT`, HDR tone-mapped,
-`X264_PRESET`/`VIDEO_CRF`) and every audio track, the preferred language
-first. Playback starts right away with the live transcode as before; once
+an MP4 with 8-bit H.264 video at the source resolution (`MAX_HEIGHT` and
+`VIDEO_CRF` only apply to live transcodes; the copy uses CRF 18 with
+`X264_PRESET`, HDR is tone-mapped) and a single audio track: the preferred
+language (`AUDIO_LANGUAGES`), else English, else the track the player
+would pick anyway. Playback starts right away with the live transcode as before; once
 the copy is ready the player uses it as a direct-play file (seeking with
 byte ranges, no CPU at all).
 
@@ -246,7 +248,7 @@ byte ranges, no CPU at all).
   watch progress starts over. For an in-place MKV conversion that keeps
   subtitles, use the ffmpeg commands in the same panel instead.
 - A failed conversion is not retried until you press *Retry*. Choosing an
-  audio track other than the copy's first one plays the original again.
+  audio track other than the copy's one plays the original again.
   `AUTO_CONVERT=false` turns automatic jobs off; *Convert now* in the
   player still starts one.
 

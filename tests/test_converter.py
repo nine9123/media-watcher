@@ -148,7 +148,7 @@ def test_mpeg2_is_converted_once_then_played_directly(tmp_path):
         check=True)
     cfg = Config(api_key=KEY, libraries=[Library("Movies", str(movies), "movies")],
                  cache_dir=str(tmp_path / "cache"), config_dir=str(tmp_path / "config"),
-                 host="127.0.0.1", port=0,
+                 host="127.0.0.1", port=0, max_height=120,  # live transcode only
                  web_dir=os.path.join(os.path.dirname(__file__), "..", "web"))
     db = Database(cfg.cache_dir, cfg.config_dir)
     images = Images(cfg, db)
@@ -177,8 +177,8 @@ def test_mpeg2_is_converted_once_then_played_directly(tmp_path):
 
         info = get_json(port, f"/api/items/{mid}/playback")
         assert info["mode"] == "direct" and info["url"] == f"/converted/{mid}"
-        assert info["audio_index"] == 2  # Japanese, the copy's first track
-        # Another audio track than the copy's first: back to the original.
+        assert info["audio_index"] == 2  # Japanese, the copy's only track
+        # Another audio track than the copy's: back to the original.
         assert get_json(port, f"/api/items/{mid}/playback?audio=1")["mode"] == "transcode"
 
         r, body = req(port, "GET", f"/converted/{mid}?download=1")
@@ -189,10 +189,11 @@ def test_mpeg2_is_converted_once_then_played_directly(tmp_path):
         probe = json.loads(subprocess.run(
             ["ffprobe", "-v", "error", "-show_streams", "-of", "json", str(out)],
             check=True, capture_output=True).stdout)["streams"]
-        # Japanese first and the default, so a browser plays it; English kept as is.
+        # Only the Japanese track, as AAC so a browser plays it.
         assert [(s["codec_name"], s.get("tags", {}).get("language"), s["disposition"]["default"])
-                for s in probe] == [("h264", "und", 1), ("aac", "jpn", 1), ("ac3", "eng", 0)]
-        assert probe[0]["pix_fmt"] == "yuv420p"
+                for s in probe] == [("h264", "und", 1), ("aac", "jpn", 1)]
+        # Source resolution, not MAX_HEIGHT.
+        assert (probe[0]["pix_fmt"], probe[0]["width"], probe[0]["height"]) == ("yuv420p", 320, 180)
 
         files = get_json(port, "/api/conversions")["files"]
         assert [f["id"] for f in files] == [mid] and files[0]["size"] == len(body)
