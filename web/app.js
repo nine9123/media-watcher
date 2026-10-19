@@ -437,6 +437,114 @@ const CAPS = (() => {
   return { v: vc.join(","), a: ac.join(",") };
 })();
 
+// --------------------------------------------- media source (WebKit) ---
+// WebKit (Safari, Orion, every browser on iOS) will not play a progressive
+// MP4 without byte ranges, which is what remux/transcode streams are. There
+// the stream is fetched here and appended to a Media Source instead; the
+// fragmented MP4 from ffmpeg is already in the form MSE wants. Other browsers
+// keep the plain <video src>, which is lighter.
+const MSE = window.ManagedMediaSource || window.MediaSource;
+const USE_MSE = !!MSE && navigator.vendor === "Apple Computer, Inc." && localStorage.getItem("mse") !== "0";
+const MSE_AHEAD = 90;   // seconds buffered ahead before reading more of the stream
+const MSE_BEHIND = 30;  // seconds kept behind the play position
+
+// Plays `url` (fragmented MP4 of type `mime`) in `el` through MSE. onError
+// gets a reason when the stream breaks; stop() ends it and frees the buffer.
+function mseFeed(el, url, mime, onError) {
+  const ms = new MSE();
+  const ctl = new AbortController();
+  const queue = [];
+  let sb = null, done = false, stopped = false, wake = null;
+  const fail = (why) => { if (!stopped) { stopped = true; ctl.abort(); onError(why); } };
+  const ahead = () => {
+    const b = el.buffered;
+    return b.length ? b.end(b.length - 1) - el.currentTime : 0;
+  };
+  const sleep = (ms_) => new Promise((r) => { wake = r; setTimeout(r, ms_); });
+
+  // Appends whatever has arrived, one appendBuffer at a time.
+  const pump = () => {
+    if (stopped || !sb || sb.updating) return;
+    const t = el.currentTime;
+    // A stream cut at a keyframe may start a little after 0; WebKit does not
+    // skip that gap by itself and would wait forever.
+    if (sb.buffered.length && t < sb.buffered.start(0)) el.currentTime = sb.buffered.start(0);
+    if (sb.buffered.length && t - sb.buffered.start(0) > MSE_BEHIND + 10) {
+      sb.remove(0, t - MSE_BEHIND);
+      return;
+    }
+    if (queue.length) {
+      const n = queue.reduce((s, c) => s + c.length, 0);
+      const buf = new Uint8Array(n);
+      let o = 0;
+      for (const c of queue) { buf.set(c, o); o += c.length; }
+      queue.length = 0;
+      try {
+        sb.appendBuffer(buf);
+      } catch (e) {
+        if (e.name !== "QuotaExceededError") { fail(`append: ${e.message}`); return; }
+        queue.unshift(buf);  // buffer full: try again once playback has moved on
+        setTimeout(pump, 1000);
+      }
+      return;
+    }
+    if (done && ms.readyState === "open") {
+      try { ms.endOfStream(); } catch (e) { /* already ended */ }
+    }
+  };
+
+  const read = async () => {
+    let r;
+    try {
+      r = await fetch(url, { signal: ctl.signal, credentials: "same-origin" });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const reader = r.body.getReader();
+      for (;;) {
+        // Do not run far ahead: back-pressure pauses ffmpeg on the server.
+        while (!stopped && (queue.length > 8 || ahead() > MSE_AHEAD)) await sleep(1000);
+        if (stopped) { reader.cancel().catch(() => {}); return; }
+        const { value, done: end } = await reader.read();
+        if (end) break;
+        queue.push(value);
+        pump();
+      }
+      done = true;
+      pump();
+    } catch (e) {
+      if (!stopped) fail(`stream: ${e.message}`);
+    }
+  };
+
+  ms.addEventListener("sourceopen", () => {
+    if (stopped || sb) return;
+    try {
+      sb = ms.addSourceBuffer(mime);
+    } catch (e) {
+      fail(`${mime}: ${e.message}`);
+      return;
+    }
+    sb.addEventListener("updateend", pump);
+    sb.addEventListener("error", () => fail("source buffer error"));
+    read();
+  });
+  // Playback moved on: trim the back of the buffer and read further ahead.
+  const onTime = () => { pump(); if (wake) { wake(); wake = null; } };
+  el.addEventListener("timeupdate", onTime);
+  if (window.ManagedMediaSource && MSE === window.ManagedMediaSource) {
+    el.disableRemotePlayback = true;  // ManagedMediaSource needs this (or an AirPlay source)
+  }
+  const src = URL.createObjectURL(ms);
+  el.src = src;
+  return {
+    stop() {
+      stopped = true;
+      ctl.abort();
+      el.removeEventListener("timeupdate", onTime);
+      URL.revokeObjectURL(src);
+    },
+  };
+}
+
 // ------------------------------------------------------------ player ---
 const video = $("#video");
 const RATES = [0.75, 1, 1.25, 1.5, 1.75, 2];
@@ -466,6 +574,7 @@ const Player = {
   token: 0,
   pendingSeek: null,
   parked: false,      // stream dropped while paused; play() restarts it
+  feed: null,         // Media Source feeder when the stream goes through MSE (WebKit)
   rate: 1,
   seriesHint: null,
   sid: Math.random().toString(36).slice(2, 12),
@@ -519,6 +628,7 @@ const Player = {
   },
 
   stopStream() {
+    if (this.feed) { this.feed.stop(); this.feed = null; }
     video.pause();
     video.removeAttribute("src");
     video.load();
@@ -564,7 +674,16 @@ const Player = {
     this.offset = info.mode === "direct" ? 0 : info.start;
     this.pendingSeek = null;
     this.renderInfo();
-    video.src = info.url;
+    if (this.feed) { this.feed.stop(); this.feed = null; }
+    if (USE_MSE && info.mode !== "direct" && info.mime) {
+      if (!MSE.isTypeSupported(info.mime)) { this.onError(`${info.mime} not supported`); return; }
+      this.feed = mseFeed(video, info.url, info.mime, (why) => {
+        if (token === this.token) this.onError(why);
+      });
+    } else {
+      video.disableRemotePlayback = false;
+      video.src = info.url;
+    }
     video.defaultPlaybackRate = video.playbackRate = this.rate;
     if (info.mode === "direct" && info.start > 0) {
       video.addEventListener("loadedmetadata", () => { video.currentTime = info.start; }, { once: true });

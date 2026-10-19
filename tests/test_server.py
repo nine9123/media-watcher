@@ -452,6 +452,8 @@ def test_playback_info_suggests_converting_cpu_transcodes(env):
     assert conv["files"] == 2 and conv["folder"].endswith("Season 01")
     assert conv["folder_command"].splitlines()[0] == conv["file_command"]
     assert "libx264" in conv["file_command"]
+    info = get_json(env, f"/api/items/{s1[0]['id']}/playback")
+    assert info["mode"] == "transcode" and info["mime"] == 'video/mp4; codecs="avc1.640028,mp4a.40.2"'
     # Plays without a video transcode in a browser that decodes 10-bit HEVC.
     assert get_json(env, f"/api/items/{s1[0]['id']}/playback?vcaps=hevc,hevc10")["convert"] is None
     assert get_json(env, f"/api/items/{s1[0]['id']}/playback?force=transcode")["convert"] is None

@@ -224,10 +224,14 @@ in the player URL (`#/play/<id>`).
 
 ## Known limitations
 
-- **Safari / iOS**: remuxed and transcoded streams are progressive
-  fragmented MP4 without byte ranges, which Safari refuses. Direct-play
-  files work; everything else needs HLS, which is not implemented yet.
-  Chrome, Edge and Firefox are fine.
+- **Safari / Orion / iOS (WebKit)**: WebKit refuses a progressive MP4
+  without byte ranges, which is what remuxed and transcoded streams are. On
+  WebKit the player therefore fetches those streams itself and feeds them to
+  Media Source Extensions (`ManagedMediaSource` on iOS 17.1+), which also
+  turns off AirPlay for them. Direct-play files use the normal player. Older
+  iOS without Media Source still only plays direct-play files; that would
+  need HLS. To go back to the plain player on WebKit, run
+  `localStorage.mse = "0"` in the browser console.
 - No subtitle support at all, by design.
 - VAAPI arguments are written for the Intel iHD and Mesa drivers but have
   not been tested on real hardware; if transcoding fails with
