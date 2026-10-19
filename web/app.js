@@ -305,6 +305,9 @@ let currentRoute = null;
 // At 0 the entry behind is another site, a wake-up page or nothing at all,
 // and history.back() would not land on a view of this app.
 let depth = 0;
+let routeCount = 0;     // bumped by every route(), so goBack can tell it ran
+let routedHash = null;  // the hash route() last showed
+let backTimer = null;
 function stampDepth() {
   const s = history.state;
   if (s && typeof s.depth === "number") { depth = s.depth; return; }
@@ -319,12 +322,24 @@ function replaceRoute(hash) {
 // Leave the current view the way the browser's back button would, or, when
 // there is no view of this app to go back to, replace it with `fallback`.
 function goBack(fallback = "#/") {
-  if (depth > 0) history.back();
-  else replaceRoute(fallback);
+  if (depth === 0) { replaceRoute(fallback); return; }
+  const before = location.href, n = routeCount;
+  history.back();
+  clearTimeout(backTimer);
+  // WebKit (Safari, Orion) does not reliably follow a same-document back
+  // with hashchange. If nothing has routed shortly after, catch up here:
+  // show the entry we landed on, or the fallback if back did nothing.
+  backTimer = setTimeout(() => {
+    if (routeCount !== n) return;
+    if (location.href !== before) route();
+    else replaceRoute(fallback);
+  }, 400);
 }
 
 function route() {
   stampDepth();
+  routeCount += 1;
+  routedHash = location.hash;
   const hash = location.hash.replace(/^#/, "") || "/";
   const [path, qs] = hash.split("?");
   if (currentRoute && !currentRoute.startsWith("/play/")) scrolls.set(currentRoute, window.scrollY);
@@ -926,7 +941,12 @@ if ("mediaSession" in navigator) {
   navigator.mediaSession.setActionHandler("nexttrack", () => Player.go(Player.info && Player.info.next_id));
 }
 
+window.addEventListener("pagehide", () => clearTimeout(backTimer));  // back left the app
 window.addEventListener("pagehide", () => { if (Player.active) { Player.report(); beacon(`/api/streams/${Player.sid}/stop`); } });
 document.addEventListener("visibilitychange", () => { if (document.hidden && Player.active) Player.report(); });
-window.addEventListener("hashchange", route);
+// Browsers report a move between hash entries with popstate, hashchange or
+// both (WebKit can skip hashchange on back/forward); route once per change.
+const onNavigate = () => { if (location.hash !== routedHash) route(); };
+window.addEventListener("popstate", onNavigate);
+window.addEventListener("hashchange", onNavigate);
 route();
