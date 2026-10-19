@@ -13,6 +13,10 @@ AniList.
   When a file needs a CPU transcode, the player shows **⚠ Convert** with
   the ffmpeg commands to re-encode it (and the rest of its folder) to
   8-bit H.264 once, so after that it only ever needs a remux.
+- **Converts what can't be watched.** The first time a file needs a CPU
+  transcode, the server also queues a one-off conversion to a
+  browser-playable MP4 and plays that copy directly once it is ready. See
+  [Automatic conversion](#automatic-conversion).
 - **Japanese audio, always.** The audio track is auto-selected: preferred
   language first (`AUDIO_LANGUAGES`, default Japanese), commentary tracks
   last, then the default flag. You can still switch track in the player;
@@ -108,6 +112,9 @@ LIBRARIES=Anime=/media/anime:shows;TV=/media/tv:shows;Movies=/media/movies:movie
 | `TMDB_LANGUAGE`   | `en-US`               | Language of descriptions and posters |
 | `METADATA_SOURCES` | `tmdb,anilist`       | Sources in the order they are tried; empty or `none` turns lookups off |
 | `METADATA_REFRESH_DAYS` | `30`            | Look a title up again after this many days (new posters, late matches) |
+| `AUTO_CONVERT`    | `true`                | Convert files that need a CPU transcode in the background, see [Automatic conversion](#automatic-conversion) |
+| `CONVERT_CACHE_DAYS` | `14`               | A converted copy not played for this long is deleted |
+| `CONVERT_CACHE_GB` | `50`                 | Size limit of the converted copies; least recently played go first |
 | `PORT`            | `8097`                | |
 | `LOG_LEVEL`       | `INFO`                | |
 
@@ -209,6 +216,41 @@ The badge in the top-right of the player shows the mode; hover it for the
 reason. Seeking in remux/transcode restarts ffmpeg at the new time (copied
 video starts on the nearest keyframe, and the player clock is corrected to
 match), so jumping around a two-hour movie is instant, not a long buffer.
+
+## Automatic conversion
+
+When the browser can only play a file through a CPU transcode (the
+**Transcode** badge), opening it also queues a conversion of that file to
+an MP4 with 8-bit H.264 video at the source resolution (`MAX_HEIGHT` and
+`VIDEO_CRF` only apply to live transcodes; the copy uses CRF 18 with
+`X264_PRESET`, HDR is tone-mapped) and a single audio track: the preferred
+language (`AUDIO_LANGUAGES`), else English, else the track the player
+would pick anyway. Playback starts right away with the live transcode as before; once
+the copy is ready the player uses it as a direct-play file (seeking with
+byte ranges, no CPU at all).
+
+- **One job per file, one at a time.** Opening the file again, from any
+  browser or tab, shows the job that is already queued or running. ffmpeg
+  runs at a lower priority (`nice`) than live streams.
+- **Progress.** The player's top bar shows *Converting 34% · 12 min*; the
+  ⚠ panel has the details, a cancel button and, when done, *Play converted
+  copy* and *Download .mp4*. All jobs and copies are on the Conversions
+  page (`#/conversions`, linked from the header while a job runs and from
+  the home page).
+- **Cache.** Copies live in `/cache/converted`. Each is kept for
+  `CONVERT_CACHE_DAYS` (14) after it was last played, and when the folder
+  passes `CONVERT_CACHE_GB` (50) the least recently played go first. A copy
+  is dropped when its original changes. Queued jobs survive a restart; a
+  job that was running starts over.
+- **Keeping it.** Download the copy and put it in place of the original if
+  you want the better format for good. The copy has no subtitles, and a
+  different file name (`.mkv` → `.mp4`) gives the item a new id, so its
+  watch progress starts over. For an in-place MKV conversion that keeps
+  subtitles, use the ffmpeg commands in the same panel instead.
+- A failed conversion is not retried until you press *Retry*. Choosing an
+  audio track other than the copy's one plays the original again.
+  `AUTO_CONVERT=false` turns automatic jobs off; *Convert now* in the
+  player still starts one.
 
 ## Player keys
 

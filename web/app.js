@@ -41,6 +41,31 @@ function fmtDur(s) {
   const m = Math.round(s / 60);
   return m >= 60 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${m}m`;
 }
+// Time left on a conversion: "< 1 min", "12 min", "1h 05m".
+function fmtEta(s) {
+  if (s == null) return "";
+  const m = Math.ceil(s / 60);
+  if (m <= 1) return "< 1 min";
+  return m >= 60 ? `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, "0")}m` : `${m} min`;
+}
+function fmtSize(b) {
+  return b >= 1024 ** 3 ? `${(b / 1024 ** 3).toFixed(1)} GB` : `${b ? Math.max(1, Math.round(b / 1024 ** 2)) : 0} MB`;
+}
+// One line for a conversion job or finished copy (see converter.py).
+function convText(c) {
+  if (!c) return "";
+  if (c.state === "running") {
+    return `Converting: ${Math.floor(c.progress * 100)}%` + (c.eta != null ? `, about ${fmtEta(c.eta)} left` : ", estimating time left…");
+  }
+  if (c.state === "queued") {
+    return `Queued` + (c.position > 1 ? ` (${c.position - 1} ahead)` : "") + (c.eta != null ? `, ready in about ${fmtEta(c.eta)}` : "");
+  }
+  if (c.state === "done") return "Converted copy ready" + (c.size ? ` (${fmtSize(c.size)})` : "");
+  if (c.state === "failed") return `Conversion failed: ${c.error || "unknown error"}`;
+  return "";
+}
+const convActive = (c) => !!c && (c.state === "queued" || c.state === "running");
+
 function epLabel(it) {
   if (it.episode == null) return it.season === 0 ? "Special" : "";
   const s = it.season === 0 ? "SP" : `S${String(it.season).padStart(2, "0")}`;
@@ -115,7 +140,10 @@ function viewHome() {
         "No libraries configured. Mount media under /media or set LIBRARIES."}</p>`;
     }
     const notice = d.problems ? `<a class="notice" href="#/problems">⚠ ${d.problems} file${d.problems === 1 ? "" : "s"} could not be read</a>` : "";
-    view.innerHTML = notice + html;
+    const c = d.status && d.status.converting;
+    const conv = c && (c.files || c.queued || c.running)
+      ? `<a class="notice dim" href="#/conversions">${c.files} converted file${c.files === 1 ? "" : "s"}${c.running || c.queued ? ", converting…" : ""}</a>` : "";
+    view.innerHTML = notice + conv + html;
     if (restore) restoreScroll();
   });
 }
@@ -293,6 +321,55 @@ function viewProblems() {
   });
 }
 
+// Conversion jobs and the converted copies in the cache. Refreshes itself
+// while a job runs, so the page can be left open to watch progress.
+let convTimer = null;
+async function viewConversions() {
+  clearTimeout(convTimer);
+  let d;
+  try { d = await api("/api/conversions"); } catch (e) {
+    if (!(e instanceof Unauthorized)) view.innerHTML = `<p class="error">${esc(e.message)}</p>`;
+    return;
+  }
+  if (currentRoute !== "/conversions") return;
+  if (!statusTimer) pollStatus();  // opened directly: the header shows the running job too
+  const job = (j) => `<div class="conv ${j.state}"><div class="file">${esc(j.title)}</div>
+      <div class="why">${esc(j.file)}</div>
+      <div class="why">${esc(convText(j))}</div>
+      ${j.state === "running" ? `<div class="progress"><i style="width:${(j.progress * 100).toFixed(1)}%"></i></div>` : ""}
+      <div class="row"><a class="btn ghost" href="#/play/${j.id}">Play</a>
+      ${j.state === "failed" ? `<button class="secondary" data-retry="${j.id}">Retry</button>` : ""}
+      <button class="ghost" data-cancel="${j.id}">${j.state === "failed" ? "Dismiss" : "Cancel"}</button></div></div>`;
+  const left = (f) => {
+    const days = Math.max(0, Math.ceil((f.expires_at * 1000 - Date.now()) / 86400000));
+    return days <= 1 ? "expires within a day" : `kept ${days} more days`;
+  };
+  const file = (f) => `<div class="conv done"><div class="file">${esc(f.title)}</div>
+      <div class="why">${esc(f.file)} · ${fmtSize(f.size)} · ${left(f)}</div>
+      <div class="row"><a class="btn ghost" href="#/play/${f.id}">Play</a>
+      <a class="btn secondary" href="${f.download}">Download</a>
+      <button class="ghost" data-delete="${f.id}">Delete</button></div></div>`;
+  view.innerHTML = `<div class="toolbar"><h1>Conversions</h1>
+      <span class="dim">${fmtSize(d.used)} of ${fmtSize(d.max)} used · copies kept ${d.days} days after the last play</span></div>
+    <p class="dim">Files this browser can only play through a CPU transcode are ${d.auto ? "converted automatically the first time they are played" : "converted when you press Convert now in the player"}, one at a time, to an 8-bit H.264 MP4 that plays directly. Download a copy to replace the original for good.</p>
+    ${d.jobs.length ? `<h2>Jobs</h2><div class="problems">${d.jobs.map(job).join("")}</div>` : ""}
+    <h2>Converted files</h2>
+    ${d.files.length ? `<div class="problems">${d.files.map(file).join("")}</div>` : `<p class="empty">None yet.</p>`}`;
+  if (d.jobs.some(convActive)) convTimer = setTimeout(viewConversions, 3000);
+}
+view.addEventListener("click", async (e) => {
+  const b = e.target.closest("[data-retry],[data-cancel],[data-delete]");
+  if (!b || currentRoute !== "/conversions") return;
+  b.disabled = true;
+  try {
+    if (b.dataset.retry) await api(`/api/items/${b.dataset.retry}/convert`, { body: {} });
+    else if (b.dataset.cancel) await api(`/api/conversions/${b.dataset.cancel}/cancel`, { body: {} });
+    else if (confirm("Delete this converted copy?")) await api(`/api/conversions/${b.dataset.delete}/delete`, { body: {} });
+  } catch (err) { if (!(err instanceof Unauthorized)) alert(err.message); }
+  viewConversions();
+  pollStatus();
+});
+
 function restoreScroll() {
   const y = scrolls.get(currentRoute);
   if (y) requestAnimationFrame(() => window.scrollTo(0, y));
@@ -359,6 +436,7 @@ function route() {
   if ((r = m(/^\/lib\/(.+)$/))) viewLibrary(r[1]);
   else if ((r = m(/^\/series\/([0-9a-f]+)$/))) viewSeries(r[1]);
   else if (m(/^\/problems$/)) viewProblems();
+  else if (m(/^\/conversions$/)) viewConversions();
   else if (m(/^\/search$/)) viewSearch(new URLSearchParams(qs).get("q") || "");
   else viewHome();
 }
@@ -377,8 +455,15 @@ function showStatus(s) {
   }
   if (s.error && !s.running) el.href = "#/problems";
   else el.removeAttribute("href");
+  const c = s.converting;
+  const conv = $("#conv-status");
+  conv.hidden = !(c && (c.running || c.queued));
+  if (c && c.running) {
+    conv.textContent = `Converting ${Math.floor(c.running.progress * 100)}%` +
+      (c.running.eta != null ? ` · ${fmtEta(c.running.eta)}` : "") + (c.queued ? ` (+${c.queued})` : "");
+  } else if (c && c.queued) conv.textContent = `${c.queued} conversion${c.queued === 1 ? "" : "s"} queued`;
   clearTimeout(statusTimer);
-  statusTimer = setTimeout(pollStatus, s.running ? 3000 : 60000);
+  statusTimer = setTimeout(pollStatus, s.running ? 3000 : c && (c.running || c.queued) ? 10000 : 60000);
 }
 async function pollStatus() {
   try {
@@ -766,9 +851,8 @@ const Player = {
     mode.className = "badge " + this.info.mode;
     mode.title = `${this.info.reason}\nvideo: ${this.info.video}, audio: ${this.info.audio}`;
     const conv = this.info.convert;
-    $("#p-convert-btn").hidden = !conv;
-    if (!conv) $("#p-convert").hidden = true;
-    else {
+    $("#p-convert-manual").hidden = !conv;
+    if (conv) {
       $("#p-convert-reason").textContent = conv.reason;
       $("#p-convert-folder").textContent = conv.folder;
       $("#p-convert-file").textContent = conv.file_command;
@@ -776,6 +860,7 @@ const Player = {
       $("#p-convert-count").textContent = conv.files;
       $("#p-convert-folder-cmd").textContent = conv.folder_command;
     }
+    this.renderConversion();
     $("#p-prev").hidden = !this.info.prev_id;
     $("#p-next").hidden = !this.info.next_id;
     $("#p-download").href = `/file/${it.id}?download=1`;
@@ -791,6 +876,55 @@ const Player = {
         artwork: [{ src: `/img/item/${it.id}`, type: "image/jpeg" }],
       });
     }
+  },
+
+  // The server-side conversion of a file that needs a CPU transcode: status
+  // in the top bar, details and download in the ⚠ Convert panel.
+  renderConversion() {
+    const info = this.info, c = info.conversion;
+    const playingCopy = info.url.startsWith("/converted/");
+    const btn = $("#p-convert-btn");
+    const shown = !!c || !!info.convert || info.mode === "transcode";
+    btn.hidden = !shown;
+    if (!shown) { $("#p-convert").hidden = true; return; }
+    if (!c) btn.textContent = "⚠ Convert";
+    else if (c.state === "done") btn.textContent = playingCopy ? "✓ Converted" : "✓ Converted – switch";
+    else if (c.state === "failed") btn.textContent = "⚠ Conversion failed";
+    else if (c.state === "running") btn.textContent = `⏳ Converting ${Math.floor(c.progress * 100)}%` + (c.eta != null ? ` · ${fmtEta(c.eta)}` : "");
+    else btn.textContent = "⏳ Queued for conversion";
+    btn.title = convText(c) || "This file needs a CPU transcode – how to convert it";
+    btn.classList.toggle("ok", !!c && c.state === "done");
+    $("#p-conv-auto").hidden = false;
+    $("#p-conv-state").textContent = c ? convText(c) + (playingCopy ? " – playing it now." : ".")
+      : "Not converted. Every play of this file re-encodes it on the server's CPU.";
+    $("#p-conv-progress").hidden = !c || c.state !== "running";
+    $("#p-conv-bar").style.width = c ? `${((c.progress || 0) * 100).toFixed(1)}%` : "0";
+    const done = !!c && c.state === "done";
+    $("#p-conv-switch").hidden = !done || playingCopy;
+    $("#p-conv-dl").hidden = !done;
+    if (done) $("#p-conv-dl").href = c.download;
+    $("#p-conv-start").hidden = !!c && c.state !== "failed";
+    $("#p-conv-start").textContent = c ? "Retry" : "Convert now";
+    $("#p-conv-cancel").hidden = !convActive(c);
+    $("#p-conv-days").textContent = info.convert_cache.days;
+    $("#p-conv-gb").textContent = info.convert_cache.gb;
+    this.pollConversion();
+  },
+  // While a job is queued or running, ask for its progress every few seconds.
+  pollConversion() {
+    clearTimeout(this.timers.conv);
+    const info = this.info;
+    if (!info || !convActive(info.conversion)) return;
+    this.timers.conv = setTimeout(async () => {
+      let r;
+      try { r = await api(`/api/conversions/${info.item.id}`); } catch (e) {
+        if (!(e instanceof Unauthorized) && this.info === info) this.pollConversion();
+        return;
+      }
+      if (!this.active || this.info !== info) return;
+      info.conversion = r.conversion;
+      this.renderConversion();
+    }, 5000);
   },
 
   renderPlay() { $("#p-play").textContent = video.paused ? "▶" : "⏸"; },
@@ -955,6 +1089,30 @@ $("#p-next-now").onclick = () => Player.go(Player.info.next_id);
 $("#p-next-cancel").onclick = () => { clearTimeout(Player.timers.next); $("#p-next-overlay").hidden = true; };
 $("#p-convert-btn").onclick = () => { $("#p-convert").hidden = !$("#p-convert").hidden; };
 $("#p-convert-close").onclick = () => { $("#p-convert").hidden = true; };
+$("#p-conv-switch").onclick = () => {
+  const c = Player.info && Player.info.conversion;
+  if (!c) return;
+  $("#p-convert").hidden = true;
+  Player.audioIndex = c.audio_index;  // the copy's own track, or the server keeps transcoding
+  Player.attempt = 0;
+  Player.load(Player.time());
+};
+$("#p-conv-start").onclick = async () => {
+  const info = Player.info;
+  if (!info) return;
+  try {
+    const r = await api(`/api/items/${info.item.id}/convert`, { body: {} });
+    if (Player.info === info) { info.conversion = r.conversion; Player.renderConversion(); }
+  } catch (e) { if (!(e instanceof Unauthorized)) $("#p-conv-state").textContent = e.message; }
+  pollStatus();
+};
+$("#p-conv-cancel").onclick = async () => {
+  const info = Player.info;
+  if (!info) return;
+  await api(`/api/conversions/${info.item.id}/cancel`, { body: {} }).catch(() => {});
+  if (Player.info === info) { info.conversion = null; Player.renderConversion(); }
+  pollStatus();
+};
 $("#p-convert").addEventListener("click", async (e) => {
   const b = e.target.closest("button[data-copy]");
   if (!b) return;

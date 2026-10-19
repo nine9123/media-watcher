@@ -37,6 +37,11 @@ class Config:
     metadata_refresh_days: int = 30
     # Tried in order, first match wins. Empty: no metadata lookups at all.
     metadata_sources: list[str] = field(default_factory=lambda: ["tmdb", "anilist"])
+    # Files that need a CPU transcode are converted once in the background and
+    # the browser-playable copy is kept in CACHE_DIR/converted.
+    auto_convert: bool = True
+    convert_cache_days: float = 14  # a copy not played for this long is deleted
+    convert_cache_gb: float = 50  # least recently played copies go first
     ffmpeg: str = "ffmpeg"
     ffprobe: str = "ffprobe"
     web_dir: str = ""
@@ -120,6 +125,9 @@ def load(env: dict[str, str] | None = None) -> Config:
         tmdb_language=env.get("TMDB_LANGUAGE", "en-US").strip() or "en-US",
         metadata_refresh_days=max(1, int(env.get("METADATA_REFRESH_DAYS", "30"))),
         metadata_sources=_metadata_sources(env.get("METADATA_SOURCES", "tmdb,anilist")),
+        auto_convert=env.get("AUTO_CONVERT", "true").strip().lower() not in ("0", "false", "no", "off"),
+        convert_cache_days=max(0.0, float(env.get("CONVERT_CACHE_DAYS", "14"))),
+        convert_cache_gb=max(0.0, float(env.get("CONVERT_CACHE_GB", "50"))),
         ffmpeg=env.get("FFMPEG", "ffmpeg"),
         ffprobe=env.get("FFPROBE", "ffprobe"),
         web_dir=env.get("WEB_DIR", os.path.join(os.path.dirname(here), "web")),

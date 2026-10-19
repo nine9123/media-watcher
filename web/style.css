@@ -62,6 +62,12 @@ h2 { font-size: 1.15rem; margin: 1.4rem 0 .6rem; }
 .jump button:hover { background: var(--bg3); color: var(--fg); }
 .grid > .card { scroll-margin-top: 5rem; }
 a#scan-status[href] { color: #ff8b8b; }
+#conv-status { color: #ffb35c; font-size: .85em; white-space: nowrap; }
+#conv-status:hover { text-decoration: underline; }
+.notice.dim { color: var(--dim); margin-left: 1rem; }
+.dim { color: var(--dim); }
+.conv .row { display: flex; gap: .4rem; margin-top: .4rem; flex-wrap: wrap; }
+.conv .progress { max-width: 30rem; }
 a#scan-status[href]:hover { text-decoration: underline; }
 .notice { display: inline-block; margin-top: .6rem; color: #ff8b8b; }
 .notice:hover { text-decoration: underline; }
@@ -115,6 +121,11 @@ a#scan-status[href]:hover { text-decoration: underline; }
 #p-mode.transcode { background: #a35a00; }
 #p-mode.direct { background: var(--ok); }
 #p-convert-btn { font-size: .85rem !important; color: #ffb35c; white-space: nowrap; }
+#p-convert-btn.ok { color: #7bd88f; }
+#p-convert .row.left { justify-content: flex-start; gap: .5rem; flex-wrap: wrap; }
+#p-conv-auto { margin-bottom: 1rem; padding-bottom: .6rem; border-bottom: 1px solid var(--bg3); }
+.progress { height: 6px; background: var(--bg3); border-radius: 3px; overflow: hidden; margin: .4rem 0; }
+.progress > i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .5s; }
 #p-convert { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 2;
   width: min(48rem, 94vw); max-height: 86vh; overflow-y: auto; background: rgba(20,21,25,.97);
   padding: 1rem 1.3rem; border-radius: var(--radius); user-select: text; font-size: .9rem; }
