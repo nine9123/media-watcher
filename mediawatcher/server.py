@@ -354,6 +354,7 @@ class App:
             "item": self.item_json(r),
             "mode": d.mode, "reason": d.reason, "video": d.video, "audio": d.audio,
             "url": url, "start": start, "duration": r["duration"],
+            "mime": playback.stream_mime(self.cfg, item, d) if d.mode != "direct" else None,
             "audio_tracks": playback.describe_audio(item["streams"]),
             "audio_index": d.audio_index, "prev_id": prev_id, "next_id": next_id,
             "next": self.item_json(nxt) if nxt else None,

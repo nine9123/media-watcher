@@ -1,7 +1,8 @@
 import shlex
 
 from mediawatcher.config import Config
-from mediawatcher.playback import Caps, convert_command, decide, ffmpeg_args, pick_audio
+from mediawatcher.playback import (Caps, convert_command, decide, ffmpeg_args, pick_audio,
+                                  stream_mime)
 
 JA = ["jpn", "ja", "japanese"]
 
@@ -168,3 +169,26 @@ def test_convert_command_tonemaps_hdr_and_renames_other_containers():
     cmd = convert_command(it, decide(it, Caps(), JA))
     assert "tonemap=" in cmd and "0:s?" not in cmd
     assert cmd.endswith("mv -- x.mkv.part x.mkv")
+
+
+def test_stream_mime_names_the_codecs_ffmpeg_writes():
+    it = item(streams=[v(profile="Main"), a(1, codec="ac3", channels=6)])
+    d = decide(it, Caps(), JA)
+    assert stream_mime(cfg(), it, d) == 'video/mp4; codecs="avc1.4D4028,mp4a.40.2"'
+    d = decide(it, Caps.parse("", "ac3"), JA)
+    assert stream_mime(cfg(), it, d) == 'video/mp4; codecs="avc1.4D4028,ac-3"'
+
+
+def test_stream_mime_for_hevc_copy_and_transcode():
+    it = item(streams=[v("hevc", "yuv420p10le", "Main 10", height=2160), a(1)])
+    d = decide(it, Caps.parse("hevc,hevc10", ""), JA)
+    assert stream_mime(cfg(), it, d) == 'video/mp4; codecs="hvc1.2.4.L153.90,mp4a.40.2"'
+    d = decide(it, Caps(), JA)
+    assert d.video == "transcode"
+    assert stream_mime(cfg(max_height=1080), it, d) == 'video/mp4; codecs="avc1.640028,mp4a.40.2"'
+    assert stream_mime(cfg(max_height=0), it, d) == 'video/mp4; codecs="avc1.640033,mp4a.40.2"'
+
+
+def test_stream_mime_without_audio():
+    it = item(streams=[v()])
+    assert stream_mime(cfg(), it, decide(it, Caps(), JA)) == 'video/mp4; codecs="avc1.640028"'

@@ -245,6 +245,46 @@ def ffmpeg_args(cfg: Config, item: dict, d: Decision, start: float = 0.0) -> lis
     return args
 
 
+# RFC 6381 codec ids for the MIME type a Media Source Extensions player must
+# declare. Decoders configure themselves from the init segment, so the level
+# only has to be one the browser accepts; it is picked from the picture size.
+AUDIO_CODEC_IDS = {"aac": "mp4a.40.2", "mp3": "mp4a.6B", "ac3": "ac-3", "eac3": "ec-3",
+                   "opus": "opus", "flac": "flac"}
+H264_PROFILE_IDS = {"baseline": "4200", "constrained baseline": "42E0", "main": "4D40",
+                    "high": "6400"}
+
+
+def stream_mime(cfg: Config, item: dict, d: Decision) -> str:
+    """MIME type with codecs of the fragmented MP4 that ffmpeg_args produces."""
+    by_index = {s.get("index"): s for s in item.get("streams") or []}
+    video = by_index.get(d.video_index) or {}
+    audio = by_index.get(d.audio_index) or {}
+    codecs = []
+    if d.video == "transcode":
+        h = _target_height(cfg, video.get("height")) or video.get("height") or 0
+        codecs.append("avc1.6400" + ("33" if h > 1080 else "28"))
+    elif d.video == "copy":
+        codec = video.get("codec")
+        h = video.get("height") or 0
+        pix = video.get("pix_fmt") or ""
+        ten_bit = "10" in pix or "12" in pix
+        if codec == "h264":
+            profile = H264_PROFILE_IDS.get((video.get("profile") or "").lower(), "6400")
+            codecs.append(f"avc1.{profile}{'33' if h > 1080 else '28'}")
+        elif codec == "hevc":
+            level = "L153" if h > 1080 else "L120"
+            codecs.append(f"hvc1.2.4.{level}.90" if ten_bit else f"hvc1.1.6.{level}.90")
+        elif codec == "av1":
+            codecs.append("av01.0.08M.10" if ten_bit else "av01.0.08M.08")
+        elif codec == "vp9":
+            codecs.append("vp09.02.40.10" if ten_bit else "vp09.00.40.08")
+    if d.audio == "aac":
+        codecs.append("mp4a.40.2")
+    elif d.audio == "copy":
+        codecs.append(AUDIO_CODEC_IDS.get(audio.get("codec") or "", "mp4a.40.2"))
+    return f'video/mp4; codecs="{",".join(codecs)}"' if codecs else "video/mp4"
+
+
 def convert_command(item: dict, d: Decision) -> str:
     """One-off shell command that re-encodes the video to 8-bit H.264.
 
