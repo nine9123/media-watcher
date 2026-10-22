@@ -43,6 +43,15 @@ var (
 const Tonemap = "zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709," +
 	"tonemap=tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv"
 
+// CopySeekSlack is added to -ss when the video is copied. For video with
+// B-frames in a container that seeks by dts (MKV, AVI, ...), ffmpeg seeks
+// 3/23 s before -ss, so a start exactly on a keyframe (which is what the
+// server asks for) lands on the keyframe before it: up to a whole GOP
+// earlier than the start the player was told, which then shows the wrong
+// time and saves the wrong position. A copied stream can only begin on a
+// keyframe anyway, so aiming a little past it still starts there.
+const CopySeekSlack = 0.25
+
 // Media is what playback needs to know about a file.
 type Media struct {
 	Path      string
@@ -329,6 +338,9 @@ func FFmpegArgs(cfg *config.Config, m *Media, d Decision, start float64) []strin
 			"-hwaccel_output_format", "vaapi")
 	}
 	if start > 0 {
+		if d.Video == "copy" {
+			start += CopySeekSlack
+		}
 		args = append(args, "-ss", fmt.Sprintf("%.3f", start))
 	}
 	args = append(args, "-i", m.Path)

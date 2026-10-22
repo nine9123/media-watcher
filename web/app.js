@@ -632,10 +632,25 @@ function mseFeed(el, url, mime, onError) {
 
 // ------------------------------------------------------------ player ---
 const video = $("#video");
+const HAS_RVFC = "requestVideoFrameCallback" in HTMLVideoElement.prototype;
+let frameCb = null;
+// Notes every video frame shown, for Player.checkVideo. Re-armed per stream
+// so a callback left on the previous source cannot go missing.
+function watchFrames() {
+  if (!HAS_RVFC) return;
+  if (frameCb != null) video.cancelVideoFrameCallback(frameCb);
+  const onFrame = () => { Player.frameAt = video.currentTime; frameCb = video.requestVideoFrameCallback(onFrame); };
+  frameCb = video.requestVideoFrameCallback(onFrame);
+}
 const RATES = [0.75, 1, 1.25, 1.5, 1.75, 2];
 // A paused remux/transcode keeps ffmpeg and its few hundred MB alive. After
 // this long the stream is dropped and restarted from the same spot on play.
 const PARK_AFTER = 3 * 60 * 1000;
+// A copied video stream that starts mid-file can begin on a frame the
+// browser's (hardware) decoder will not start from: the audio plays over a
+// black picture for good. After this many seconds of playback with no video
+// frame shown, the stream is treated as broken and re-encoded instead.
+const NO_VIDEO_AFTER = 8;
 
 // Series id for an item, from views already loaded, so the remembered audio
 // language can go along with the very first playback request.
@@ -660,6 +675,8 @@ const Player = {
   pendingSeek: null,
   parked: false,      // stream dropped while paused; play() restarts it
   feed: null,         // Media Source feeder when the stream goes through MSE (WebKit)
+  frameAt: 0,         // video.currentTime of the last video frame shown, or of the last seek
+  frames: -1,         // decoded frame count seen at frameAt (browsers without requestVideoFrameCallback)
   rate: 1,
   seriesHint: null,
   sid: Math.random().toString(36).slice(2, 12),
@@ -758,6 +775,9 @@ const Player = {
     this.audioIndex = info.audio_index;
     this.offset = info.mode === "direct" ? 0 : info.start;
     this.pendingSeek = null;
+    this.frameAt = 0;
+    this.frames = -1;
+    watchFrames();
     this.renderInfo();
     if (this.feed) { this.feed.stop(); this.feed = null; }
     if (USE_MSE && info.mode !== "direct" && info.mime) {
@@ -786,6 +806,25 @@ const Player = {
       if (token === this.token && this.active && video.readyState < 3 && !video.paused) this.onError("timeout");
     }, 30000);
   },
+
+  // Audio playing over no picture: see NO_VIDEO_AFTER. Called on timeupdate.
+  checkVideo() {
+    const info = this.info;
+    if (!info || info.mode === "direct" || info.video === "none" || video.paused || video.seeking || document.hidden) return;
+    if (!HAS_RVFC) {
+      const q = video.getVideoPlaybackQuality ? video.getVideoPlaybackQuality() : null;
+      const n = q ? q.totalVideoFrames - q.droppedVideoFrames : -1;
+      if (n < 0) return;
+      if (n !== this.frames) { this.frames = n; this.frameAt = video.currentTime; return; }
+    }
+    if (video.currentTime - this.frameAt < NO_VIDEO_AFTER) return;
+    // A copied stream would start on the same frame again: go straight to a transcode.
+    if (info.video === "copy") this.attempt = Math.max(this.attempt, 1);
+    this.frameAt = video.currentTime;
+    this.onError("no video frames");
+  },
+  // Background tabs, seeks and pauses show no frames for a while: start counting again.
+  resetVideoCheck() { this.frameAt = video.currentTime; },
 
   onError(why) {
     if (!this.active || !this.info) return;
@@ -1063,7 +1102,11 @@ video.addEventListener("playing", () => {
 video.addEventListener("waiting", () => { $("#spinner").hidden = false; });
 video.addEventListener("pause", () => { Player.renderPlay(); Player.report(); Player.poke(); Player.armPark(); });
 video.addEventListener("play", () => { clearTimeout(Player.timers.park); Player.renderPlay(); });
-video.addEventListener("timeupdate", () => Player.renderTime());
+video.addEventListener("timeupdate", () => { Player.renderTime(); Player.checkVideo(); });
+video.addEventListener("seeking", () => Player.resetVideoCheck());
+video.addEventListener("seeked", () => Player.resetVideoCheck());
+video.addEventListener("play", () => Player.resetVideoCheck());
+document.addEventListener("visibilitychange", () => Player.resetVideoCheck());
 video.addEventListener("progress", () => Player.renderTime());
 video.addEventListener("ended", () => Player.ended());
 video.addEventListener("error", () => {
