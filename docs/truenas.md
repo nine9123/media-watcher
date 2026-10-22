@@ -39,21 +39,25 @@ The image includes the VAAPI drivers for `HWACCEL=vaapi` by default
 AMD). Only for an Intel iGPU older than Broadwell set `EXTRA_PACKAGES` at the
 top of the workflow to `i965-va-driver` and push.
 
-The build pulls `python:3.12-slim` from Docker Hub, retrying a few times. If
-it still fails with `TLS handshake timeout` on `auth.docker.io`, the runner's
-route to Docker Hub is the problem, not the repository. Either fix that (DNS,
-MTU, proxy on the runner host) or push a copy of the base image to the Gitea
-registry from a machine that can reach the hub:
+The build pulls `debian:trixie-slim` (the runtime) and `golang:1.23-bookworm`
+(the compiler) from Docker Hub, retrying a few times. If it still fails with
+`TLS handshake timeout` on `auth.docker.io`, the runner's route to Docker Hub
+is the problem, not the repository. Either fix that (DNS, MTU, proxy on the
+runner host) or push copies of both images to the Gitea registry from a
+machine that can reach the hub:
 
 ```
-docker pull python:3.12-slim
-docker tag python:3.12-slim gitea.internal:30008/nine9/python:3.12-slim
-docker push gitea.internal:30008/nine9/python:3.12-slim
+for img in debian:trixie-slim golang:1.23-bookworm; do
+  docker pull "$img"
+  docker tag "$img" "gitea.internal:30008/nine9/$img"
+  docker push "gitea.internal:30008/nine9/$img"
+done
 ```
 
-and set the repository variable `BASE_IMAGE` (Settings → Actions → Variables)
-to `gitea.internal:30008/nine9/python:3.12-slim`. A pull-through mirror works
-the same way.
+and set the repository variables `BASE_IMAGE` and `GO_IMAGE` (Settings →
+Actions → Variables) to `gitea.internal:30008/nine9/debian:trixie-slim` and
+`gitea.internal:30008/nine9/golang:1.23-bookworm`. A pull-through mirror
+works the same way.
 
 ## 2. Let TrueNAS pull from the registry
 
@@ -84,7 +88,7 @@ that doesn't exist.
 |---------------------------------------------|------------|-----------|-------|
 | `/mnt/tank/media`                           | `/media`   | anywhere  | your existing library, mounted read-only |
 | `/mnt/ssd/apps/media-watcher/cache`         | `/cache`   | SSD       | library index + thumbnails; disposable |
-| `/mnt/tank/apps/media-watcher/config`       | `/config`  | anywhere  | `state.db`, your watch progress — include it in snapshots/backups |
+| `/mnt/tank/apps/media-watcher/config`       | `/config`  | anywhere  | `progress.jsonl`, your watch progress — include it in snapshots/backups |
 
 Separate datasets for cache and config means you can snapshot and replicate
 `config` without dragging thousands of thumbnails along, and can destroy and
