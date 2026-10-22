@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -146,6 +147,10 @@ func TestRemuxStreamIsAFragmentedMP4(t *testing.T) {
 		codecs = append(codecs, s["codec_name"])
 	}
 	same(t, codecs, []any{"h264", "aac"})
+	// The stream starts at that keyframe, not a GOP before it: the player's clock is start + currentTime.
+	if d, _ := strconv.ParseFloat(ffprobeStreams(t, out)[0]["duration"].(string), 64); d < 5.8-info["start"].(float64) || d > 6.1-info["start"].(float64) {
+		t.Errorf("stream is %.3fs long, want %.3fs", d, 6-info["start"].(float64))
+	}
 	if !strings.Contains(string(body), "moof") {
 		t.Error("not fragmented")
 	}

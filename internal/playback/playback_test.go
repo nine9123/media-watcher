@@ -184,8 +184,12 @@ func TestFFmpegArgsNeverMapSubtitles(t *testing.T) {
 	if !has(args, "-sn") || strings.Contains(joined, "0:s") {
 		t.Error("subtitles")
 	}
-	if argAfter(args, "-ss") != "12.500" || index(args, "-ss") > index(args, "-i") {
-		t.Error("seek")
+	// Copied video: a little past the keyframe, or ffmpeg backs up to the one before it.
+	if argAfter(args, "-ss") != "12.750" || index(args, "-ss") > index(args, "-i") {
+		t.Error("seek", argAfter(args, "-ss"))
+	}
+	if tr := FFmpegArgs(cfg(), it, Decide(it, DefaultCaps(), JA, nil, ""), 12.5); argAfter(tr, "-ss") != "12.500" {
+		t.Error("transcode seek", argAfter(tr, "-ss"))
 	}
 	if !reflect.DeepEqual(maps(args), []string{"0:0", "0:2"}) {
 		t.Error(maps(args))
