@@ -234,6 +234,110 @@ func TestAuth(t *testing.T) {
 	}
 }
 
+func TestWrongKeysLockOutTheClient(t *testing.T) {
+	e := newEnv(t)
+	r, _ := e.req("POST", "/api/login", obj{"key": key}, nil, false)
+	cookie := strings.Split(r.Header.Get("Set-Cookie"), ";")[0]
+	for i := 0; i < maxKeyFails; i++ {
+		if r, _ := e.req("GET", "/api/home?api_key=wrong", nil, nil, false); r.StatusCode != 401 {
+			t.Fatal(i, r.StatusCode)
+		}
+	}
+	// Locked out: even the right key is refused, on every way of sending it.
+	if r, _ := e.req("GET", "/api/home", nil, nil, true); r.StatusCode != 429 {
+		t.Error(r.StatusCode)
+	}
+	if r, _ := e.req("POST", "/api/login", obj{"key": key}, nil, false); r.StatusCode != 429 {
+		t.Error(r.StatusCode)
+	}
+	// An existing session is not affected.
+	if r, _ := e.req("GET", "/api/home", nil, map[string]string{"Cookie": cookie}, false); r.StatusCode != 200 {
+		t.Error(r.StatusCode)
+	}
+}
+
+func TestGuardForgetsOldFailures(t *testing.T) {
+	g, now := newGuard(), time.Now()
+	for i := 0; i < maxKeyFails; i++ {
+		g.fail("a", now)
+	}
+	if _, ok := g.blocked("a", now); !ok {
+		t.Error("not blocked")
+	}
+	if _, ok := g.blocked("b", now); ok {
+		t.Error("other address blocked")
+	}
+	if _, ok := g.blocked("a", now.Add(keyLockout)); ok {
+		t.Error("still blocked after the lockout")
+	}
+	g.fail("c", now)
+	g.succeed("c")
+	for i := 0; i < maxKeyFails-1; i++ {
+		g.fail("c", now)
+	}
+	if _, ok := g.blocked("c", now); ok {
+		t.Error("a successful login did not reset the count")
+	}
+}
+
+func TestCrossOriginWritesAreRefused(t *testing.T) {
+	e := newEnv(t)
+	r, _ := e.req("POST", "/api/login", obj{"key": key}, nil, false)
+	cookie := strings.Split(r.Header.Get("Set-Cookie"), ";")[0]
+	host := strings.TrimPrefix(e.srv.URL, "http://")
+	for _, c := range []struct {
+		headers map[string]string
+		want    int
+	}{
+		{map[string]string{"Sec-Fetch-Site": "same-origin"}, 200},
+		{map[string]string{"Sec-Fetch-Site": "same-site"}, 403}, // another app on the NAS, other port
+		{map[string]string{"Sec-Fetch-Site": "cross-site"}, 403},
+		{map[string]string{"Origin": "http://" + host}, 200},
+		{map[string]string{"Origin": "http://evil.example"}, 403},
+		{map[string]string{"Origin": "null"}, 403},
+		{map[string]string{"Origin": "https://media.example", "X-Forwarded-Host": "media.example"}, 200},
+		{map[string]string{}, 200}, // not a browser
+	} {
+		c.headers["Cookie"] = cookie
+		if r, body := e.req("POST", "/api/scan", nil, c.headers, false); r.StatusCode != c.want {
+			t.Errorf("%v: %d %s", c.headers, r.StatusCode, body)
+		}
+	}
+	if r, _ := e.req("POST", "/api/login", obj{"key": key}, map[string]string{"Origin": "http://evil.example"}, false); r.StatusCode != 403 {
+		t.Error("login CSRF:", r.StatusCode)
+	}
+	// Reads stay allowed: <video src> and <img> are cross-origin-safe GETs.
+	if r, _ := e.req("GET", "/api/home", nil, map[string]string{"Cookie": cookie, "Sec-Fetch-Site": "same-site"}, false); r.StatusCode != 200 {
+		t.Error(r.StatusCode)
+	}
+}
+
+func TestSecurityHeadersAndSecureCookie(t *testing.T) {
+	e := newEnv(t)
+	r, _ := e.req("GET", "/", nil, nil, false)
+	for k, v := range map[string]string{"X-Frame-Options": "DENY", "X-Content-Type-Options": "nosniff",
+		"Referrer-Policy": "no-referrer"} {
+		if got := r.Header.Get(k); got != v {
+			t.Errorf("%s: %q", k, got)
+		}
+	}
+	if !strings.Contains(r.Header.Get("Content-Security-Policy"), "frame-ancestors 'none'") {
+		t.Error(r.Header.Get("Content-Security-Policy"))
+	}
+	r, _ = e.req("POST", "/api/login", obj{"key": key}, nil, false)
+	if strings.Contains(r.Header.Get("Set-Cookie"), "Secure") {
+		t.Error("Secure cookie over plain HTTP:", r.Header.Get("Set-Cookie"))
+	}
+	r, _ = e.req("POST", "/api/login", obj{"key": key}, map[string]string{"X-Forwarded-Proto": "https"}, false)
+	if !strings.Contains(r.Header.Get("Set-Cookie"), "; Secure") {
+		t.Error("no Secure behind an HTTPS proxy:", r.Header.Get("Set-Cookie"))
+	}
+	r, _ = e.req("POST", "/api/logout", nil, nil, false)
+	if c := r.Header.Get("Set-Cookie"); !strings.HasPrefix(c, "mw_session=;") || !strings.Contains(c, "Max-Age=0") {
+		t.Error(c)
+	}
+}
+
 func TestLibraryGroupingAndCleanup(t *testing.T) {
 	e := newEnv(t)
 	lib := e.get("/api/libraries/Shows")

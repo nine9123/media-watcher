@@ -69,6 +69,9 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	if len(cfg.APIKey) < 16 {
+		log.Warnf("API_KEY is only %d characters: use a random one of 16 or more (openssl rand -hex 24)", len(cfg.APIKey))
+	}
 	if len(cfg.Libraries) == 0 {
 		log.Warnf("no libraries found: mount media under MEDIA_ROOT or set LIBRARIES")
 	}
