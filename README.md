@@ -78,15 +78,6 @@ no checkout to build from and no `.env`. The Gitea workflow in
 Item ids are derived from the path inside the library, so wiping `/cache`
 or changing the host mount path keeps your watch progress.
 
-**Upgrading from the Python version.** Earlier images kept the same data in
-SQLite (`/cache/library.db`, `/config/state.db`). On its first start the Go
-version imports both, so watch progress, probe results and metadata carry
-over without a rescan, and existing logins stay valid. A successful import
-of `state.db` is marked by `/config/state.db.imported`; if it fails, the
-error is logged and it is tried again on the next start. The old files are
-left in place but no longer updated: progress recorded after the switch is
-not seen by an older image.
-
 ### Libraries
 
 By default every folder directly under `/media` is a library
@@ -139,13 +130,13 @@ LIBRARIES=Anime=/media/anime:shows;TV=/media/tv:shows;Movies=/media/movies:movie
 Jellyfin/Kodi naming works as-is, and so do typical release and fansub names:
 
 ```
-Anime/Frieren (2023)/Season 01/Frieren - S01E05 - Title.mkv
-Anime/Frieren (2023)/Specials/Frieren - S00E01.mkv
-Anime/Mushishi/Season 2/[Group] Mushishi - 03 [BD 1080p].mkv
-Anime/Show.Name.S02.1080p.BluRay-GRP/Show.Name.S02E03.1080p.BluRay-GRP.mkv
-Anime/Some Show/05 - Title.mkv           (bare numbers inside a series folder)
-Anime/[SubsPlease] Loose Show - 12 (1080p).mkv   (joins "Loose Show" folder if one exists)
-Movies/Heat (1995)/Heat (1995).mkv
+Shows/Example Show (2023)/Season 01/Example Show - S01E05 - Title.mkv
+Shows/Example Show (2023)/Specials/Example Show - S00E01.mkv
+Shows/Other Show/Season 2/[Group] Other Show - 03 [BD 1080p].mkv
+Shows/Show.Name.S02.1080p.BluRay-GRP/Show.Name.S02E03.1080p.BluRay-GRP.mkv
+Shows/Some Show/05 - Title.mkv           (bare numbers inside a series folder)
+Shows/[Group] Loose Show - 12 (1080p).mkv   (joins "Loose Show" folder if one exists)
+Movies/Some Movie (1995)/Some Movie (1995).mkv
 ```
 
 - Series = the top-level folder inside the library, however deep the
@@ -280,7 +271,7 @@ an MP4 with 8-bit H.264 video at the source resolution (`MAX_HEIGHT` and
 `VIDEO_CRF` only apply to live transcodes; the copy uses CRF 18 with
 `X264_PRESET`, HDR is tone-mapped) and a single audio track: the preferred
 language (`AUDIO_LANGUAGES`), else English, else the track the player
-would pick anyway. Playback starts right away with the live transcode as before; once
+would pick anyway. Playback starts right away with the live transcode; once
 the copy is ready the player uses it as a direct-play file (seeking with
 byte ranges, no CPU at all).
 
