@@ -10,7 +10,6 @@ import (
 	"crypto/hmac"
 	"crypto/sha1"
 	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -68,6 +67,8 @@ type App struct {
 	boot string
 	web  fs.FS
 
+	guard *guard
+
 	streamsMu sync.Mutex
 	streams   map[string]*os.Process
 }
@@ -77,7 +78,7 @@ func New(cfg *config.Config, db *store.Store, im *images.Images, sc *scan.Scanne
 	mac.Write([]byte("mediawatcher-session"))
 	a := &App{Cfg: cfg, DB: db, Images: im, Scanner: sc, Converter: cv,
 		token: hex.EncodeToString(mac.Sum(nil)), boot: strconv.FormatInt(time.Now().UnixNano(), 16),
-		web: web.FS, streams: map[string]*os.Process{}}
+		web: web.FS, streams: map[string]*os.Process{}, guard: newGuard()}
 	if cfg.WebDir != "" {
 		a.web = os.DirFS(cfg.WebDir)
 	}
@@ -148,28 +149,31 @@ func handle(method, pattern string, auth bool, fn func(a *App, rq *request) erro
 	routes = append(routes, route{method, regexp.MustCompile("^" + pattern + "$"), auth, fn})
 }
 
-func (a *App) authorized(r *http.Request) bool {
+// authorize checks a request for a protected route: nil when it carries the
+// API key (X-Api-Key or ?api_key=) or a valid session cookie.
+func (a *App) authorize(r *http.Request) *httpError {
 	key := r.Header.Get("X-Api-Key")
 	if key == "" {
 		key = r.URL.Query().Get("api_key")
 	}
-	if key != "" && subtle.ConstantTimeCompare([]byte(key), []byte(a.Cfg.APIKey)) == 1 {
-		return true
+	if key != "" {
+		return a.checkKey(r, key)
 	}
-	if c, err := r.Cookie(cookieName); err == nil && c.Value != "" {
-		return subtle.ConstantTimeCompare([]byte(c.Value), []byte(a.token)) == 1
+	if c, err := r.Cookie(cookieName); err == nil && c.Value != "" && equalSecret(c.Value, a.token) {
+		return nil
 	}
-	return false
+	return fail(401, "unauthorized")
 }
 
 func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Server", "mediawatcher")
+	securityHeaders(w.Header())
 	defer func() {
 		if v := recover(); v != nil {
 			if v == http.ErrAbortHandler {
 				panic(v)
 			}
-			log.Errorf("error handling %s %s: %v\n%s", r.Method, r.URL, v, debug.Stack())
+			log.Errorf("error handling %s %s: %v\n%s", r.Method, r.URL.Path, v, debug.Stack())
 			sendJSON(w, r, map[string]string{"error": "internal error"}, 500, nil)
 		}
 	}()
@@ -190,6 +194,9 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return fail(413, "")
 		}
 		rq.body = body
+		if r.Method != http.MethodGet && r.Method != http.MethodHead && !sameOrigin(r) {
+			return fail(403, "cross-origin request refused")
+		}
 		for _, rt := range routes {
 			if rt.method != r.Method && !(r.Method == http.MethodHead && rt.method == http.MethodGet) {
 				continue
@@ -198,8 +205,10 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if m == nil {
 				continue
 			}
-			if rt.auth && !a.authorized(r) {
-				return fail(401, "unauthorized")
+			if rt.auth {
+				if he := a.authorize(r); he != nil {
+					return he
+				}
 			}
 			rq.groups = m[1:]
 			return rt.fn(a, rq)
@@ -209,7 +218,7 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if he, ok := err.(*httpError); ok {
 		sendJSON(w, r, map[string]string{"error": he.msg}, he.status, nil)
 	} else if err != nil {
-		log.Errorf("error handling %s %s: %v", r.Method, r.URL, err)
+		log.Errorf("error handling %s %s: %v", r.Method, r.URL.Path, err) // not r.URL: it can hold ?api_key=
 		sendJSON(w, r, map[string]string{"error": "internal error"}, 500, nil)
 	}
 }
@@ -512,7 +521,7 @@ func init() {
 	handle("POST", `/api/login`, false, (*App).login)
 	handle("POST", `/api/logout`, false, func(a *App, rq *request) error {
 		sendJSON(rq.w, rq.r, map[string]bool{"ok": true}, 200,
-			map[string]string{"Set-Cookie": cookieName + "=; Path=/; HttpOnly; Max-Age=0"})
+			map[string]string{"Set-Cookie": sessionCookie(rq.r, "", 0)})
 		return nil
 	})
 	handle("GET", `/api/home`, true, (*App).apiHome)
@@ -657,12 +666,15 @@ func (a *App) login(rq *request) error {
 	if v, ok := b["key"]; ok && truthy(v) {
 		key = fmt.Sprint(v)
 	}
-	if subtle.ConstantTimeCompare([]byte(key), []byte(a.Cfg.APIKey)) != 1 {
-		time.Sleep(time.Second) // slow down guessing
-		return fail(401, "wrong key")
+	if he := a.checkKey(rq.r, key); he != nil {
+		if he.status == 401 {
+			time.Sleep(time.Second) // slow down guessing
+			he.msg = "wrong key"
+		}
+		return he
 	}
-	cookie := fmt.Sprintf("%s=%s; Path=/; HttpOnly; SameSite=Strict; Max-Age=%d", cookieName, a.token, 400*24*3600)
-	sendJSON(rq.w, rq.r, map[string]bool{"ok": true}, 200, map[string]string{"Set-Cookie": cookie})
+	sendJSON(rq.w, rq.r, map[string]bool{"ok": true}, 200,
+		map[string]string{"Set-Cookie": sessionCookie(rq.r, a.token, 400*24*3600)})
 	return nil
 }
 

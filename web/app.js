@@ -494,7 +494,10 @@ $("#login-form").onsubmit = async (e) => {
   $("#login-error").textContent = "";
   const r = await fetch("/api/login", { method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ key: $("#login-key").value }), credentials: "same-origin" });
-  if (!r.ok) { $("#login-error").textContent = "Wrong key"; return; }
+  if (!r.ok) {
+    $("#login-error").textContent = r.status === 429 ? ((await r.json().catch(() => ({}))).error || "Too many tries") : "Wrong key";
+    return;
+  }
   $("#login").hidden = true;
   $("#login-key").value = "";
   cache.clear();

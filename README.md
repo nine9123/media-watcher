@@ -5,6 +5,13 @@ your library and play it in the browser, reliably. No actors, no user
 management, no subtitles; posters and descriptions come from TMDB and
 AniList.
 
+| | |
+|---|---|
+| ![Home: continue watching, next up, recently added](docs/screenshots/home.png) | ![Series page with episodes and watch state](docs/screenshots/series.png) |
+| ![Library grid with filters](docs/screenshots/library.png) | ![Player, direct play](docs/screenshots/player.jpg) |
+
+<sub>Screenshots use generated test videos and placeholder posters.</sub>
+
 - **Plays everything.** Each file is played the cheapest way that works:
   direct (byte ranges, zero CPU), remux (video copied, audio converted if
   needed, near-zero CPU), or transcode only when the browser cannot decode
@@ -103,7 +110,7 @@ LIBRARIES=Anime=/media/anime:shows;TV=/media/tv:shows;Movies=/media/movies:movie
 
 | Variable          | Default               | Meaning |
 |-------------------|-----------------------|---------|
-| `API_KEY`         | (required, ≥ 8 chars) | Login key. Also accepted as `X-Api-Key` header or `?api_key=` |
+| `API_KEY`         | (required, ≥ 8 chars) | Login key, use 16+ random characters. Also accepted as `X-Api-Key` header or `?api_key=`; see [Security](#security) |
 | `MEDIA_ROOT`      | `/media`              | Where libraries are auto-discovered |
 | `LIBRARIES`       |                       | Explicit library list, see above |
 | `AUDIO_LANGUAGES` | `jpn,ja,japanese`     | Preferred audio, in order of the language tag; titles are matched too ("Japanese 2.0") |
@@ -226,6 +233,45 @@ reason. Seeking in remux/transcode restarts ffmpeg at the new time (copied
 video starts on the nearest keyframe, and the player clock is corrected to
 match), so jumping around a two-hour movie is instant, not a long buffer.
 
+## Benchmarks
+
+What the server costs while it runs, measured with
+[`.claude-task/tools/bench.py`](.claude-task/tools/bench.py): one client plays
+a 1080p, 8 Mbit/s, 5-minute file for 60 s, paced at 10 Mbit/s like a browser
+filling its buffer, while the CPU time and memory of the server **and every
+ffmpeg it starts** are sampled from `/proc` once a second.
+
+| State | CPU (% of one core) | Memory (RSS, server + ffmpeg) |
+|---|---|---|
+| Idle, library scanned | **0.0 %** | **9 MB** |
+| Direct play (H.264/AAC MP4, byte ranges) | **0.1 %** | **9 MB** |
+| Remux (H.264 copied, AC-3 → AAC) | **4.6 %** | 67 MB |
+| CPU transcode (HEVC → H.264, `veryfast`, 4 threads) | 96 % | 407 MB |
+
+- **Idle is free.** Nothing measurable happens between scans; the Go
+  process sits at about 9 MB (14 MB after the browsing test below).
+- **Browsing** 1000 `/api/home` requests (10 at a time) took 0.11 CPU-seconds
+  in total, about 0.1 ms each: ~6500 requests/s, p99 3.7 ms.
+- **Direct play** is the kernel copying the file to the socket; the server
+  itself does essentially nothing.
+- **Remux** is one ffmpeg copying the video and converting only the audio.
+- **Transcode** is the only expensive mode, and it is the one the player
+  warns about (**⚠ Convert**) and [converts away](#automatic-conversion) so
+  that a file only needs it once.
+- Static binary: 6.7 MB.
+
+Setup: an Apple-silicon (arm64) Docker VM with 16 cores, ffmpeg 5.1, a
+library of 28 files, test videos generated with ffmpeg's `testsrc2`. Idle,
+direct play and remux barely depend on the CPU; a transcode on a typical
+NAS CPU (Celeron/Ryzen embedded) takes several cores and may not keep up in
+real time at 1080p, which is why `HWACCEL=vaapi` and automatic conversion
+exist. To repeat it against your own server:
+
+```sh
+python3 .claude-task/tools/bench.py http://localhost:8097 "$API_KEY" "$(pgrep -x mediawatcher)" \
+    <direct item id> <remux item id> <transcode item id>
+```
+
 ## Automatic conversion
 
 When the browser can only play a file through a CPU transcode (the
@@ -287,6 +333,37 @@ in the player URL (`#/play/<id>`).
 - VAAPI arguments are written for the Intel iHD and Mesa drivers but have
   not been tested on real hardware; if transcoding fails with
   `HWACCEL=vaapi`, switch back to `none` and check the container log.
+
+## Security
+
+Media Watcher is meant for a home network or behind a reverse proxy with
+HTTPS. There is one secret, `API_KEY`; use a random one
+(`openssl rand -hex 24`). The server logs a warning when it is shorter than
+16 characters.
+
+- **Sign-in** sets an `HttpOnly`, `SameSite=Strict` session cookie (plus
+  `Secure` when the request came over HTTPS, directly or with
+  `X-Forwarded-Proto: https`). The cookie is an HMAC of the key, never the
+  key itself. It stays valid until `API_KEY` changes; *sign out* only
+  removes it from that browser, so change the key to sign out everywhere.
+- **Guessing is throttled.** After 10 wrong keys within 15 minutes from one
+  IP address (login form, `X-Api-Key` and `?api_key=` alike), every key from
+  that address is refused with `429` for 15 minutes, the right one
+  included. Browsers already signed in keep working. Behind a reverse proxy
+  all clients share the proxy's address (`X-Forwarded-For` is ignored
+  because anyone can set it), so a lockout there applies to everyone for
+  those 15 minutes.
+- **Cross-site requests are refused.** Any request that changes something
+  (POST) is rejected with `403` when the browser marks it as coming from
+  another site or another app on the same host (`Sec-Fetch-Site`, or an
+  `Origin` that is not this server). Scripts that send `X-Api-Key` without
+  those headers are not affected.
+- Every response has `X-Frame-Options: DENY`, `X-Content-Type-Options:
+  nosniff`, `Referrer-Policy: no-referrer` and a CSP that forbids framing
+  and plugins. Request URLs, which can contain `?api_key=`, are not written
+  to the log.
+- `?api_key=` URLs (for VLC/mpv) carry the key in plain text: don't share
+  them, and prefer HTTPS when the server is reachable from outside.
 
 ## Development
 
